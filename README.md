@@ -2,7 +2,7 @@
 
 Étude d'opportunité et d'architecture pour une **application desktop d'assainissement gouverné d'historiques Git et d'exécutions CI/CD** (GitHub Enterprise / Azure DevOps) : analyse de dépôts, réécriture **contrôlée** de l'historique des commits (reword, squash, reorder, drop) assistée par un agent IA à skills configurables, et politiques de rétention CI/CD simulées puis validées.
 
-> **Statut : étude (make-or-buy + conception).** Aucun code applicatif — ce dépôt contient l'analyse de l'existant, la recommandation argumentée, l'architecture cible et les backlogs. Recherche documentaire effectuée le **2026-07-24** (sources officielles citées dans chaque document).
+> **Statut : MVP en développement** (étude livrée le 2026-07-24, développement lancé le même jour selon le [backlog MVP](docs/09-backlog-mvp.md)). Voir l'[avancement](#avancement-du-mvp) ci-dessous. Recherche documentaire effectuée le **2026-07-24** (sources officielles citées dans chaque document).
 
 ## Conclusion en bref
 
@@ -31,6 +31,40 @@
 | 15 | [Stratégie de tests](docs/15-strategie-tests.md) | Fixtures Git, invariants, contrats API, E2E, sécurité |
 
 Les six skills attendues sont fournies en exemples exécutables dans [`skills/`](skills/) (`conventional-commits` sert de référence complète : manifeste + prompt + tests).
+
+## Avancement du MVP
+
+Architecture réalisée conformément à l'[architecture cible](docs/05-architecture-cible.md) : cœur **Rust** réutilisable [`crates/mc-core`](crates/mc-core) + application **Tauri v2 / React** [`apps/desktop`](apps/desktop). Les six skills de [`skills/`](skills/) sont chargées telles quelles par le moteur (YAML + prompts + tests).
+
+| Epic | État | Détail |
+|---|---|---|
+| E1 Socle & workspace | ✅ | Déclaration multi-dépôts, SQLite local, mode offline complet |
+| E2 Analyse d'historique | ✅ | Segment merge-base..tip, heuristiques (faible/conforme/mentions générées/doublons), fichiers & trailers & signatures & partage par commit ; vue graphe simple (liste ordonnée) — graphe visuel riche : V2 |
+| E3 Moteur de plan | ✅ | Reword pur git2 (arbres garantis intacts) + squash/fixup/drop/reorder via le **sequencer natif de Git** piloté par `GIT_SEQUENCE_EDITOR` en worktree temporaire ; dry-run **réel** dans `refs/mc/preview/*` ; backup réf+tag ; apply par bascule ; rollback ; export/import JSON ; empreinte anti-dérive |
+| E4 Agent IA & skills | ✅ | Chargement des skills YAML, **garde-fous vérifiés par l'application** (post-conditions), providers Ollama / endpoint compatible OpenAI / Anthropic + **assistant local déterministe** (repli hors-ligne), consentement avec aperçu avant tout envoi distant, runner de self-tests |
+| E5 Sécurité & secrets | ✅ | Coffre OS via crate `keyring` (backend mémoire pour tests/CI), scopes affichés avant enregistrement, redaction systématique des sorties |
+| E6 CI/CD | ✅ | Clients GitHub Actions & Azure DevOps Builds (pagination, continuation token, 429/Retry-After), inventaire avec leases, politique + **simulation obligatoire**, suppression unitaire à double confirmation, revérification des leases avant tout DELETE |
+| E7 Journal & audit | ✅ | Append-only SQLite, journalisation **avant** chaque suppression, export JSONL |
+| E8 Packaging | 🟡 | CI GitHub Actions (tests cœur Linux/Windows + build front + bundle Windows sur tag/dispatch). Bundle local : nécessite MSVC Build Tools ou la toolchain GNU (voir ci-dessous) |
+
+**Vérification** : suite de tests d'intégration sur dépôts Git synthétiques couvrant les critères CA-1 → CA-14 ([détail](docs/14-criteres-acceptation.md)) ; UI vérifiée en mode navigateur (mock IPC intégré : `npm run dev` dans `apps/desktop` sans Tauri).
+
+**Reste pour clore le MVP** (voir [backlog](docs/09-backlog-mvp.md)) : E2E desktop automatisé via tauri-driver, packaging signé, documentation utilisateur de prise en main.
+
+### Développer
+
+```bash
+# Cœur (tests) — nécessite git dans le PATH
+cargo test -p mc-core
+
+# UI seule dans un navigateur (mock, aucune écriture réelle)
+cd apps/desktop && npm install && npm run dev
+
+# Application desktop complète
+cd apps/desktop && npm run tauri dev
+```
+
+**Toolchain Windows** : les bundles officiels sont construits par la CI (windows-latest, MSVC). En local, MSVC Build Tools est la voie recommandée pour `mc-desktop`. Sans MSVC, l'hôte `x86_64-pc-windows-gnu` + une toolchain MinGW complète (ex. WinLibs) suffit pour **développer et tester `mc-core`** (validé : 30 tests) ; la compilation du binaire Tauri en gnu peut échouer selon l'environnement (build scripts volumineux — constaté sur poste durci EDR).
 
 ## Conventions de lecture
 

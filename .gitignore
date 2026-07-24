@@ -12,4 +12,5 @@ node_modules/
 target/
 dist/
 *.sqlite
+*.tsbuildinfo
 apps/desktop/src-tauri/gen/schemas/
