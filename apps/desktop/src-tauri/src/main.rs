@@ -21,7 +21,12 @@ struct Tasks(Mutex<HashMap<String, CancelToken>>);
 /// Contexte d'une commande longue : progression et fragments IA relayés vers
 /// l'UI sur le canal unique `mc://task`, jeton enregistré pour `task_cancel`.
 /// Sans `task_id` (appelant historique), contexte inerte.
-fn task_ctx(app: &tauri::AppHandle, tasks: &Tasks, task: &str, task_id: &Option<String>) -> TaskCtx {
+fn task_ctx(
+    app: &tauri::AppHandle,
+    tasks: &Tasks,
+    task: &str,
+    task_id: &Option<String>,
+) -> TaskCtx {
     match task_id {
         Some(id) => {
             let cancel = CancelToken::new();
@@ -114,10 +119,11 @@ async fn repo_scan(
 ) -> CmdResult<mc_core::api::ScanResult> {
     let ctx = task_ctx(&app, &tasks, "repo_scan", &task_id);
     let core = core.inner().clone();
-    let res =
-        tauri::async_runtime::spawn_blocking(move || core.repo_scan_with(&id, branch, &ctx).map_err(err))
-            .await
-            .map_err(join_err);
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        core.repo_scan_with(&id, branch, &ctx).map_err(err)
+    })
+    .await
+    .map_err(join_err);
     task_done(&tasks, &task_id);
     res?
 }
@@ -166,10 +172,11 @@ async fn plan_dry_run(
 ) -> CmdResult<Plan> {
     let ctx = task_ctx(&app, &tasks, "plan_dry_run", &task_id);
     let core = core.inner().clone();
-    let res =
-        tauri::async_runtime::spawn_blocking(move || core.plan_dry_run_with(&plan_id, &ctx).map_err(err))
-            .await
-            .map_err(join_err);
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        core.plan_dry_run_with(&plan_id, &ctx).map_err(err)
+    })
+    .await
+    .map_err(join_err);
     task_done(&tasks, &task_id);
     res?
 }
@@ -376,7 +383,10 @@ async fn ci_inventory(
     task_id: Option<String>,
 ) -> CmdResult<Vec<CiRun>> {
     let ctx = task_ctx(&app, &tasks, "ci_inventory", &task_id);
-    let res = core.ci_inventory_with(&account_id, max, &ctx).await.map_err(err);
+    let res = core
+        .ci_inventory_with(&account_id, max, &ctx)
+        .await
+        .map_err(err);
     task_done(&tasks, &task_id);
     res
 }
