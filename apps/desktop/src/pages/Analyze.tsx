@@ -6,9 +6,10 @@ import { asIpcError, call } from "../ipc";
 import type {
   BranchInfo, CommitInfo, Plan, PlanOp, Proposal, RepoRef, RiskAxis, ScanResult,
 } from "../types";
+import { useTask } from "../tasks";
 import {
-  Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, ICON_SM, Modal, VerdictBadge, VerdictLegend,
-  inputCls, riskTone, shaCls, thCls, trCls, useToast,
+  Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, ICON_SM, Modal, ProgressPanel,
+  VerdictBadge, VerdictLegend, inputCls, riskTone, shaCls, thCls, trCls, useToast,
 } from "../ui";
 
 const flagLabels: Record<string, [string, string]> = {
@@ -37,22 +38,31 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   const [order, setOrder] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // T11 : texte streamé par groupe pendant la génération (affiché en direct).
+  const [streams, setStreams] = useState<Record<number, string>>({});
   const importRef = useRef<HTMLInputElement>(null);
   const dragSha = useRef<string | null>(null);
+  const task = useTask((group, delta) =>
+    setStreams((s) => ({ ...s, [group]: (s[group] ?? "") + delta })),
+  );
 
   const doScan = async (b?: string) => {
     setError(null);
     setBusy(true);
+    const taskId = task.begin("Analyse de la branche");
     try {
-      const res = await call<ScanResult>("repo_scan", { id: repo.id, branch: b ?? null });
+      const res = await call<ScanResult>("repo_scan", { id: repo.id, branch: b ?? null, taskId });
       setScan(res);
       setBranch(res.branch);
       setSelection(new Set());
       setOrder(res.commits.map((c) => c.sha));
       setProposals(await call<Proposal[]>("proposals_list", { repoId: repo.id }));
     } catch (e) {
-      setError(asIpcError(e).message);
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Analyse annulée — aucun effet de bord");
+      else setError(ie.message);
     } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -124,19 +134,21 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
 
   const generate = async (consentRemote: boolean, groups?: string[][]) => {
     setError(null);
+    const g = groups ?? groupsForSkill();
+    if (g.length === 0) {
+      setError(
+        skill === "commit-synthesis"
+          ? "Sélectionner au moins deux commits pour une synthèse."
+          : "Sélectionner au moins un commit.",
+      );
+      return;
+    }
     setBusy(true);
+    setStreams({});
+    const taskId = task.begin("Génération des propositions");
     try {
-      const g = groups ?? groupsForSkill();
-      if (g.length === 0) {
-        setError(
-          skill === "commit-synthesis"
-            ? "Sélectionner au moins deux commits pour une synthèse."
-            : "Sélectionner au moins un commit.",
-        );
-        return;
-      }
       const generated = await call<Proposal[]>("proposals_generate", {
-        repoId: repo.id, skill, groups: g, providerId: null, consentRemote,
+        repoId: repo.id, skill, groups: g, providerId: null, consentRemote, taskId,
       });
       setProposals(await call<Proposal[]>("proposals_list", { repoId: repo.id }));
       setConsent(null);
@@ -150,13 +162,17 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     } catch (e) {
       const ie = asIpcError(e);
       if (ie.code === "consent_required") {
-        const g = groups ?? groupsForSkill();
         const preview = await call<string>("ai_preview", { repoId: repo.id, skill, shas: g[0] });
         setConsent({ preview, groups: g });
+      } else if (ie.code === "cancelled") {
+        setProposals(await call<Proposal[]>("proposals_list", { repoId: repo.id }));
+        toast("info", "Génération annulée — les propositions déjà produites sont conservées");
       } else {
         setError(ie.message);
       }
     } finally {
+      task.end();
+      setStreams({});
       setBusy(false);
     }
   };
@@ -238,13 +254,17 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     if (!plan) return;
     setError(null);
     setBusy(true);
+    const taskId = task.begin("Dry-run du plan");
     try {
-      setPlan(await call<Plan>("plan_dry_run", { planId: plan.id }));
+      setPlan(await call<Plan>("plan_dry_run", { planId: plan.id, taskId }));
       setRisks(await call<RiskAxis[]>("plan_risk", { planId: plan.id }));
       toast("success", "Dry-run réussi — résultat réel construit dans la préview, branche intacte");
     } catch (e) {
-      setError(asIpcError(e).message);
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Dry-run annulé — branche et préview intactes");
+      else setError(ie.message);
     } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -253,20 +273,25 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     if (!plan) return;
     setError(null);
     setBusy(true);
+    const taskId = task.begin("Application du plan");
     try {
-      const updated = await call<Plan>("plan_apply", { planId: plan.id, confirm: confirm ?? null });
+      const updated = await call<Plan>("plan_apply", { planId: plan.id, confirm: confirm ?? null, taskId });
       setPlan(updated);
       setConfirmReq(null);
+      task.end();
       toast("success", `Plan appliqué — backup ${updated.backup_ref ?? ""}`);
       await doScan(branch);
     } catch (e) {
       const ie = asIpcError(e);
       if (ie.code === "confirm_required") {
         setConfirmReq({ expected: ie.expected ?? branch, message: ie.message });
+      } else if (ie.code === "cancelled") {
+        toast("info", "Application annulée avant le backup — rien n'a été écrit");
       } else {
         setError(ie.message);
       }
     } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -402,6 +427,15 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         </div>
       </div>
       <ErrorBox error={error} />
+      {task.running && (
+        <ProgressPanel
+          label={task.running.label}
+          phase={task.running.phase}
+          current={task.running.current}
+          total={task.running.total}
+          onCancel={task.cancel}
+        />
+      )}
 
       <Card
         title={
@@ -557,6 +591,19 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
 
       <div className="grid grid-cols-2 gap-4">
         <Card title={`Propositions (${proposals.length}) — l'IA propose, vous disposez`}>
+          {Object.keys(streams).length > 0 && (
+            <div className="mb-2.5 space-y-1.5">
+              {Object.entries(streams).map(([g, text]) => (
+                <div key={g} className="rounded border border-violet-800 bg-violet-950/30 p-2 text-xs">
+                  <span className="mb-1 flex items-center gap-1.5 text-violet-300">
+                    <Sparkles size={12} className="animate-pulse" /> flux du fournisseur — groupe{" "}
+                    {Number(g) + 1} (brut, en cours)
+                  </span>
+                  <pre className="max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-slate-300">{text}</pre>
+                </div>
+              ))}
+            </div>
+          )}
           {proposals.length === 0 ? (
             <Empty
               actionLabel={selection.size > 0 ? `Proposer (${selection.size})` : undefined}

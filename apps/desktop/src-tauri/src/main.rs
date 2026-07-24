@@ -1,16 +1,55 @@
 // Empêche l'ouverture d'une console sous Windows en release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mc_core::model::*;
+use mc_core::task::{CancelToken, TaskCtx};
 use mc_core::Core;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Le cœur est partagé en Arc pour permettre aux commandes lourdes de
 /// s'exécuter hors des workers IPC (spawn_blocking) sans geler l'UI.
 type ArcCore = Arc<Core>;
+
+/// Registre des tâches annulables : task_id (généré par l'UI) → jeton.
+#[derive(Default)]
+struct Tasks(Mutex<HashMap<String, CancelToken>>);
+
+/// Contexte d'une commande longue : progression et fragments IA relayés vers
+/// l'UI sur le canal unique `mc://task`, jeton enregistré pour `task_cancel`.
+/// Sans `task_id` (appelant historique), contexte inerte.
+fn task_ctx(app: &tauri::AppHandle, tasks: &Tasks, task: &str, task_id: &Option<String>) -> TaskCtx {
+    match task_id {
+        Some(id) => {
+            let cancel = CancelToken::new();
+            tasks.0.lock().unwrap().insert(id.clone(), cancel.clone());
+            let app = app.clone();
+            TaskCtx::new(task, id, cancel, move |payload| {
+                let _ = app.emit("mc://task", &payload);
+            })
+        }
+        None => TaskCtx::noop(task),
+    }
+}
+
+fn task_done(tasks: &Tasks, task_id: &Option<String>) {
+    if let Some(id) = task_id {
+        tasks.0.lock().unwrap().remove(id);
+    }
+}
+
+/// Demande d'annulation coopérative : le cœur s'interrompt au prochain point
+/// d'arrêt sûr (l'opération répond alors avec le code `cancelled`).
+#[tauri::command]
+fn task_cancel(tasks: tauri::State<'_, Tasks>, task_id: String) -> CmdResult<()> {
+    if let Some(token) = tasks.0.lock().unwrap().get(&task_id) {
+        token.cancel();
+    }
+    Ok(())
+}
 
 /// Contrat d'erreur UI ↔ cœur : `code` est stable (l'UI s'y branche),
 /// `message` est le libellé humain, `expected` porte la valeur attendue
@@ -66,14 +105,21 @@ fn join_err(e: tauri::Error) -> CmdError {
 
 #[tauri::command]
 async fn repo_scan(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
     core: tauri::State<'_, ArcCore>,
     id: String,
     branch: Option<String>,
+    task_id: Option<String>,
 ) -> CmdResult<mc_core::api::ScanResult> {
+    let ctx = task_ctx(&app, &tasks, "repo_scan", &task_id);
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || core.repo_scan(&id, branch).map_err(err))
-        .await
-        .map_err(join_err)?
+    let res =
+        tauri::async_runtime::spawn_blocking(move || core.repo_scan_with(&id, branch, &ctx).map_err(err))
+            .await
+            .map_err(join_err);
+    task_done(&tasks, &task_id);
+    res?
 }
 
 #[tauri::command]
@@ -111,23 +157,41 @@ fn plan_set_ops(
 }
 
 #[tauri::command]
-async fn plan_dry_run(core: tauri::State<'_, ArcCore>, plan_id: String) -> CmdResult<Plan> {
+async fn plan_dry_run(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
+    core: tauri::State<'_, ArcCore>,
+    plan_id: String,
+    task_id: Option<String>,
+) -> CmdResult<Plan> {
+    let ctx = task_ctx(&app, &tasks, "plan_dry_run", &task_id);
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || core.plan_dry_run(&plan_id).map_err(err))
-        .await
-        .map_err(join_err)?
+    let res =
+        tauri::async_runtime::spawn_blocking(move || core.plan_dry_run_with(&plan_id, &ctx).map_err(err))
+            .await
+            .map_err(join_err);
+    task_done(&tasks, &task_id);
+    res?
 }
 
 #[tauri::command]
 async fn plan_apply(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
     core: tauri::State<'_, ArcCore>,
     plan_id: String,
     confirm: Option<String>,
+    task_id: Option<String>,
 ) -> CmdResult<Plan> {
+    let ctx = task_ctx(&app, &tasks, "plan_apply", &task_id);
     let core = core.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || core.plan_apply(&plan_id, confirm).map_err(err))
-        .await
-        .map_err(join_err)?
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        core.plan_apply_with(&plan_id, confirm, &ctx).map_err(err)
+    })
+    .await
+    .map_err(join_err);
+    task_done(&tasks, &task_id);
+    res?
 }
 
 #[tauri::command]
@@ -202,16 +266,23 @@ fn ai_preview(
 
 #[tauri::command]
 async fn proposals_generate(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
     core: tauri::State<'_, ArcCore>,
     repo_id: String,
     skill: String,
     groups: Vec<Vec<String>>,
     provider_id: Option<String>,
     consent_remote: bool,
+    task_id: Option<String>,
 ) -> CmdResult<Vec<Proposal>> {
-    core.proposals_generate(&repo_id, &skill, groups, provider_id, consent_remote)
+    let ctx = task_ctx(&app, &tasks, "proposals_generate", &task_id);
+    let res = core
+        .proposals_generate_with(&repo_id, &skill, groups, provider_id, consent_remote, &ctx)
         .await
-        .map_err(err)
+        .map_err(err);
+    task_done(&tasks, &task_id);
+    res
 }
 
 #[tauri::command]
@@ -297,11 +368,17 @@ fn ci_account_remove(core: tauri::State<'_, ArcCore>, id: String) -> CmdResult<(
 
 #[tauri::command]
 async fn ci_inventory(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
     core: tauri::State<'_, ArcCore>,
     account_id: String,
     max: usize,
+    task_id: Option<String>,
 ) -> CmdResult<Vec<CiRun>> {
-    core.ci_inventory(&account_id, max).await.map_err(err)
+    let ctx = task_ctx(&app, &tasks, "ci_inventory", &task_id);
+    let res = core.ci_inventory_with(&account_id, max, &ctx).await.map_err(err);
+    task_done(&tasks, &task_id);
+    res
 }
 
 #[tauri::command]
@@ -320,14 +397,21 @@ fn policy_list(core: tauri::State<'_, ArcCore>) -> CmdResult<Vec<RetentionPolicy
 
 #[tauri::command]
 async fn ci_simulate(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
     core: tauri::State<'_, ArcCore>,
     account_id: String,
     policy_id: String,
     max: usize,
+    task_id: Option<String>,
 ) -> CmdResult<SimulationReport> {
-    core.ci_simulate(&account_id, &policy_id, max)
+    let ctx = task_ctx(&app, &tasks, "ci_simulate", &task_id);
+    let res = core
+        .ci_simulate_with(&account_id, &policy_id, max, &ctx)
         .await
-        .map_err(err)
+        .map_err(err);
+    task_done(&tasks, &task_id);
+    res
 }
 
 #[tauri::command]
@@ -433,6 +517,7 @@ fn main() {
             let core = Core::new(&db_path, skills_dir)
                 .map_err(|e| format!("initialisation du cœur : {e}"))?;
             app.manage(Arc::new(core));
+            app.manage(Tasks::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -473,7 +558,8 @@ fn main() {
             ci_simulate,
             ci_delete_run,
             audit_list,
-            audit_export
+            audit_export,
+            task_cancel
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de mister-commitia");

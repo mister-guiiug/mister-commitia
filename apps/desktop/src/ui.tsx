@@ -131,6 +131,51 @@ export function ErrorBox({ error }: { error: string | null }) {
   );
 }
 
+/// Barre de progression d'une opération longue (T2) : phase courante, compteur
+/// quand le total est connu (sinon indéterminée), annulation coopérative.
+export function ProgressPanel({
+  label, phase, current, total, onCancel,
+}: {
+  label: string; phase: string; current: number; total: number | null;
+  onCancel?: () => void;
+}) {
+  const pct = total ? Math.min(100, Math.round((current / total) * 100)) : null;
+  return (
+    <div className="flex items-center gap-3 rounded border border-slate-800 bg-slate-950/70 px-3 py-2">
+      <Loader2 size={ICON_MD} className="shrink-0 animate-spin text-teal-400" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2 text-xs">
+          <span className="truncate text-slate-300">
+            {label}&nbsp;— {phase}
+          </span>
+          <span className="shrink-0 tabular-nums text-slate-500">
+            {total ? `${current}/${total}` : "…"}
+          </span>
+        </div>
+        <div
+          role="progressbar"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={total ?? undefined}
+          aria-valuenow={total ? current : undefined}
+          aria-valuetext={phase}
+          className="mt-1.5 h-1.5 overflow-hidden rounded bg-slate-800"
+        >
+          <div
+            className={`h-full rounded bg-teal-500 transition-[width] duration-200 ${pct === null ? "w-1/3 animate-pulse" : ""}`}
+            style={pct === null ? undefined : { width: `${pct}%` }}
+          />
+        </div>
+      </div>
+      {onCancel && (
+        <Button kind="ghost" onClick={onCancel} title="Annuler l'opération en cours (arrêt au prochain point sûr)">
+          Annuler
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /// État vide ACTIONNABLE : toujours proposer le geste suivant quand il existe.
 export function Empty({
   children, actionLabel, onAction,

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpDown, PlugZap, ShieldAlert, Trash2 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
+import { useTask } from "../tasks";
 import type { CiAccount, CiKind, CiRun, RetentionPolicy, SimulationReport } from "../types";
 import {
-  Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, Field, ICON_SM, VerdictBadge,
-  inputCls, trCls, useToast,
+  Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, Field, ICON_SM, ProgressPanel,
+  VerdictBadge, inputCls, trCls, useToast,
 } from "../ui";
 
 export default function CiPage() {
@@ -19,6 +20,7 @@ export default function CiPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const formRef = useRef<HTMLDivElement>(null);
+  const task = useTask();
 
   // Formulaire d'ajout de compte
   const [kind, setKind] = useState<CiKind>("github");
@@ -85,13 +87,17 @@ export default function CiPage() {
   const inventory = async () => {
     setError(null);
     setBusy(true);
+    const taskId = task.begin("Inventaire des runs");
     try {
-      const list = await call<CiRun[]>("ci_inventory", { accountId: account, max: 500 });
+      const list = await call<CiRun[]>("ci_inventory", { accountId: account, max: 500, taskId });
       setRuns(list);
       toast("info", `${list.length} runs inventoriés`);
     } catch (e) {
-      setError(asIpcError(e).message);
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Inventaire annulé");
+      else setError(ie.message);
     } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -120,13 +126,17 @@ export default function CiPage() {
     setError(null);
     setBusy(true);
     setReport(null);
+    const taskId = task.begin("Simulation de rétention");
     try {
-      const r = await call<SimulationReport>("ci_simulate", { accountId: account, policyId: policy, max: 500 });
+      const r = await call<SimulationReport>("ci_simulate", { accountId: account, policyId: policy, max: 500, taskId });
       setReport(r);
       toast("success", `Simulation terminée — ${r.candidates.length} candidat(s), ${r.protected.length} protégé(s), aucune suppression émise`);
     } catch (e) {
-      setError(asIpcError(e).message);
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Simulation annulée — aucun rapport produit, aucune suppression émise");
+      else setError(ie.message);
     } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -269,6 +279,17 @@ export default function CiPage() {
         }
       >
         <ErrorBox error={error} />
+        {task.running && (
+          <div className="mb-3">
+            <ProgressPanel
+              label={task.running.label}
+              phase={task.running.phase}
+              current={task.running.current}
+              total={task.running.total}
+              onCancel={task.cancel}
+            />
+          </div>
+        )}
         {accounts.length === 0 && (
           <Empty
             actionLabel="Ajouter un accès"

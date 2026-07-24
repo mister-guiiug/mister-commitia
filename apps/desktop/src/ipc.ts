@@ -46,6 +46,46 @@ export async function pickDirectory(): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Événements des opérations longues (T2/T11) — canal unique `mc://task`.
+// ---------------------------------------------------------------------------
+
+export interface TaskProgressEvent {
+  task_id: string; task: string; kind: "progress";
+  phase: string; current: number; total: number | null;
+}
+export interface TaskAiDeltaEvent {
+  task_id: string; task: string; kind: "ai_delta";
+  group: number; delta: string;
+}
+export type TaskEvent = TaskProgressEvent | TaskAiDeltaEvent;
+
+const mockBus = new EventTarget();
+const mockCancelled = new Set<string>();
+
+export function newTaskId(): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2);
+}
+
+/// S'abonne aux événements de tâches (progression + fragments IA).
+/// Retourne la fonction de désabonnement.
+export async function onTaskEvent(cb: (e: TaskEvent) => void): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<TaskEvent>("mc://task", (e) => cb(e.payload));
+  }
+  const h = (e: Event) => cb((e as CustomEvent<TaskEvent>).detail);
+  mockBus.addEventListener("mc-task", h);
+  return () => mockBus.removeEventListener("mc-task", h);
+}
+
+/// Demande d'annulation coopérative — le cœur s'arrête au prochain point sûr.
+export function cancelTask(taskId: string): void {
+  void call("task_cancel", { taskId }).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
 // Mock navigateur — données de démonstration cohérentes avec les modèles.
 // ---------------------------------------------------------------------------
 
@@ -132,6 +172,45 @@ const audit = (category: string, action: string, target: string, result = "ok") 
   mock.audit.unshift({ seq: ++seq, ts: now(), actor: "demo", category, action, target, params: {}, result });
 };
 
+// --- Simulation des tâches longues (progression, streaming, annulation) ----
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const cancelledError = (): IpcError => ({
+  code: "cancelled",
+  message: "opération annulée par l'utilisateur",
+});
+const emitTask = (e: TaskEvent) =>
+  mockBus.dispatchEvent(new CustomEvent("mc-task", { detail: e }));
+
+/// Rejoue des phases [libellé, current, total, durée ms] comme le ferait le
+/// cœur : émission AVANT la phase, annulation vérifiée à chaque point sûr.
+async function playPhases(
+  taskId: unknown,
+  task: string,
+  phases: [string, number, number | null, number][],
+): Promise<void> {
+  const tid = typeof taskId === "string" && taskId ? taskId : null;
+  for (const [phase, current, total, ms] of phases) {
+    if (tid) {
+      if (mockCancelled.has(tid)) throw cancelledError();
+      emitTask({ task_id: tid, task, kind: "progress", phase, current, total });
+    }
+    await sleep(ms);
+    if (tid && mockCancelled.has(tid)) throw cancelledError();
+  }
+}
+
+/// Streaming IA simulé : le texte arrive mot à mot (kind ai_delta).
+async function streamAiText(taskId: unknown, group: number, text: string): Promise<void> {
+  const tid = typeof taskId === "string" && taskId ? taskId : null;
+  if (!tid) return;
+  for (const word of text.match(/\S+\s*/g) ?? []) {
+    if (mockCancelled.has(tid)) throw cancelledError();
+    emitTask({ task_id: tid, task: "proposals_generate", kind: "ai_delta", group, delta: word });
+    await sleep(45);
+  }
+}
+
 const demoRuns: CiRun[] = Array.from({ length: 14 }, (_, i) => ({
   account_id: "acct_demo",
   pipeline_id: i % 2 === 0 ? "9" : "12",
@@ -166,7 +245,18 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
       audit("config", "governance_update", r.name);
       return r;
     }
+    case "task_cancel":
+      mockCancelled.add(String(args.taskId));
+      return null;
     case "repo_scan": {
+      await playPhases(args.taskId, "repo_scan", [
+        ["ouverture du dépôt", 0, null, 140],
+        ["lecture des commits", 1, 4, 160],
+        ["lecture des commits", 2, 4, 160],
+        ["lecture des commits", 3, 4, 160],
+        ["lecture des commits", 4, 4, 160],
+        ["analyse des messages", 0, null, 140],
+      ]);
       const repo = mock.repos.find((x) => x.id === args.id)!;
       const res: ScanResult = {
         repo, branch: "feature/express-payment", base: "00".padEnd(40, "9"),
@@ -229,23 +319,34 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
             "consentement requis : envoi à un fournisseur IA distant : accord explicite requis, aperçu des données à l'appui",
         } satisfies IpcError;
       }
-      const out: Proposal[] = groups.map((g) => {
+      const out: Proposal[] = [];
+      for (let gi = 0; gi < groups.length; gi++) {
+        await playPhases(args.taskId, "proposals_generate", [
+          ["génération des propositions", gi + 1, groups.length, 130],
+        ]);
+        const g = groups[gi];
         const c = demoCommits.find((x) => x.sha === g[0]);
         const refused = skill === "ai-signature-cleaner" && (mock.repos[0].governance.ai_attribution_policy === "keep-required");
-        return {
+        const after = refused ? null : skill === "commit-synthesis"
+          ? "fix(pay): stabilize payment flow\n\nSynthèse de 2 commits d'itération."
+          : `fix(pay): stabilise payment retries`;
+        // T11 : le texte arrive en streaming avant la proposition finale.
+        if (after) await streamAiText(args.taskId, gi, after);
+        const p: Proposal = {
           id: id("prp"), repo_id: String(args.repoId), skill, skill_version: "1.0.0", targets: g,
           before: c ? `${c.subject}\n\n${c.body}`.trim() : "…",
-          after: refused ? null : skill === "commit-synthesis"
-            ? "fix(pay): stabilize payment flow\n\nSynthèse de 2 commits d'itération."
-            : `fix(pay): stabilise payment retries`,
+          after,
           explanation: refused
             ? "La politique du dépôt exige la conservation de la traçabilité IA (keep-required) : normalisation refusée."
             : "Heuristique locale (sans LLM) : type « fix » inféré ; références conservées.",
           risk: "low", status: refused ? "refused" : "proposed", decision: null, created_at: now(),
         };
-      });
-      mock.proposals.unshift(...out);
-      out.forEach(() => audit("skill", "proposal", skill));
+        // Comme le cœur : chaque proposition est enregistrée dès sa génération
+        // (une annulation conserve celles déjà produites).
+        mock.proposals.unshift(p);
+        audit("skill", "proposal", skill);
+        out.push(p);
+      }
       return out;
     }
     case "proposals_list": return mock.proposals.filter((p) => p.repo_id === args.repoId);
@@ -272,6 +373,14 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
       p.ops = args.ops as PlanOp[]; p.status = "draft"; p.mapping = []; return p;
     }
     case "plan_dry_run": {
+      await playPhases(args.taskId, "plan_dry_run", [
+        ["vérification de l'empreinte", 0, null, 250],
+        ["rejeu de la structure (sequencer git)", 0, null, 550],
+        ["réécriture des messages", 1, 3, 180],
+        ["réécriture des messages", 2, 3, 180],
+        ["réécriture des messages", 3, 3, 180],
+        ["contrôle des invariants et écriture de la préview", 0, null, 250],
+      ]);
       const p = mock.plans.find((x) => x.id === args.planId)!;
       p.status = "dry_run_ok"; p.dry_run_at = now();
       p.preview_ref = `refs/mc/preview/${p.id}`;
@@ -287,6 +396,9 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
           message: "refusé : dry-run requis avant application (aucun dry-run réussi pour ce plan)",
         } satisfies IpcError;
       }
+      await playPhases(args.taskId, "plan_apply", [
+        ["contrôles préalables (empreinte, préview, partage)", 0, null, 300],
+      ]);
       // Le commit a1 de la démo est « partagé » → confirmation renforcée.
       if (args.confirm !== p.fingerprint.branch) {
         throw {
@@ -295,6 +407,10 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
           message: `confirmation requise : branche partagée : saisir exactement « ${p.fingerprint.branch} » pour confirmer la réécriture`,
         } satisfies IpcError;
       }
+      await playPhases(args.taskId, "plan_apply", [
+        ["création du backup", 0, null, 300],
+        ["bascule de la branche (non annulable)", 0, null, 250],
+      ]);
       p.status = "applied"; p.applied_at = now();
       p.backup_ref = `refs/mc/backup/${p.fingerprint.branch}/20260724T100000Z`;
       p.backup_tag = `refs/tags/mc-backup-${p.id}`;
@@ -324,13 +440,24 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
     }
     case "ci_account_list": return mock.accounts;
     case "ci_account_remove": mock.accounts = mock.accounts.filter((a) => a.id !== args.id); return null;
-    case "ci_inventory": return demoRuns;
+    case "ci_inventory":
+      await playPhases(args.taskId, "ci_inventory", [
+        ["inventaire des runs", 0, 500, 350],
+        ["inventaire des runs", 100, 500, 350],
+        ["inventaire des runs", 200, 500, 350],
+      ]);
+      return demoRuns;
     case "policy_save": {
       const p: RetentionPolicy = { id: id("pol"), name: String(args.name), rules: args.rules as RetentionPolicy["rules"], enabled: true };
       mock.policies.push(p); return p;
     }
     case "policy_list": return mock.policies;
     case "ci_simulate": {
+      await playPhases(args.taskId, "ci_simulate", [
+        ["inventaire des runs", 0, 500, 350],
+        ["inventaire des runs", 100, 500, 350],
+        ["application de la politique de rétention", 0, null, 300],
+      ]);
       mock.simulated = true;
       const report: SimulationReport = {
         id: id("sim"), policy_id: String(args.policyId), account_id: String(args.accountId),
