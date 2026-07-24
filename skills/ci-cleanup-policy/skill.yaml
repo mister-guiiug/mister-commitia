@@ -1,0 +1,67 @@
+apiVersion: mister-commitia/skill.v1
+name: ci-cleanup-policy
+version: 1.0.0
+owner: platform-team@example.org
+status: published
+description: >
+  Analyse l'inventaire des exécutions CI/CD (GitHub Actions, Azure DevOps)
+  et propose une politique de rétention adaptée : ce qui doit être conservé,
+  ce qui peut être supprimé, avec motifs. Produit un rapport — jamais une
+  action.
+
+scope:
+  repos: ["*"]
+  branches: []
+  operations: [report]
+
+risk_default: low
+
+inputs:
+  - ci.inventory            # runs : pipeline, statut, résultat, date, branche, tags, lease
+  - ci.existing_policies    # rétention native déjà configurée côté plateforme
+  - org.retention_rules     # contraintes internes (ex. conserver les runs de release 2 ans)
+
+output:
+  type: report
+  must_explain: true
+
+rules:
+  - id: proteger-par-defaut
+    text: >
+      Toujours proposer de conserver : les runs sous retention lease (Azure
+      DevOps), les runs de release/tags, les N derniers runs de chaque
+      pipeline (N ≥ 5), le dernier run réussi de chaque branche par défaut,
+      les runs en cours.
+  - id: s-appuyer-sur-le-natif
+    text: >
+      Si la plateforme offre une rétention native (réglages Azure DevOps,
+      rétention GitHub Actions), la recommander en premier ; l'outil ne
+      remplace pas ces mécanismes, il les complète.
+  - id: motifs-obligatoires
+    text: "Chaque catégorie (conserver / supprimable) est motivée, avec volumétrie estimée."
+
+guardrails:
+  - assert: report_only                   # cette skill ne produit jamais d'opération
+  - assert: leased_runs_always_protected
+  - assert: must_refuse_when
+    condition: "org.retention_rules.legal_hold == true"
+
+prompt: |
+  Inventaire des exécutions CI/CD :
+  {{inventory}}
+  Politiques natives déjà en place : {{existing_policies}}
+  Contraintes internes : {{org_rules}}
+  Propose une politique de rétention : règles chiffrées (âge max par statut,
+  N à conserver par pipeline, protections), estimation du volume supprimable,
+  et liste "à conserver" avec motifs. Rapport uniquement, aucune action.
+  Réponds en JSON : {"politique": {...}, "a_conserver": [...],
+  "supprimables": [...], "volumetrie": {...}, "explication": "..."}
+
+tests:
+  - name: lease-toujours-protege
+    given:
+      inventory:
+        - { run_id: 1, age_days: 400, leased: true }
+        - { run_id: 2, age_days: 400, leased: false }
+    expect:
+      protected_contains: [1]

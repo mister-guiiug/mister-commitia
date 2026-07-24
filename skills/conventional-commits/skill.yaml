@@ -1,0 +1,70 @@
+# Exemple complet de skill (référence) — voir docs/12-skills-structure.md
+apiVersion: mister-commitia/skill.v1
+name: conventional-commits
+version: 1.2.0
+owner: platform-team@example.org
+status: published
+description: >
+  Reformule un message de commit pour le rendre conforme à la spécification
+  Conventional Commits 1.0.0, en expliquant le choix du type.
+
+scope:
+  repos: ["*"]
+  branches: ["*"]
+  operations: [reword]
+
+risk_default: low
+
+inputs:
+  - commit.subject
+  - commit.body
+  - diff.stat
+  - diff.files
+  - repo.convention
+
+output:
+  type: message-proposal
+  must_explain: true
+
+rules:
+  - id: type-obligatoire
+    text: >
+      Le type doit appartenir à la liste configurée du dépôt (défaut :
+      feat, fix, refactor, chore, docs, test, ci, perf, build, style).
+  - id: choix-du-type
+    text: >
+      Le type est déduit du diff, pas du message d'origine : nouveau
+      comportement → feat ; correction d'un défaut → fix ; restructuration
+      sans changement de comportement → refactor ; fichiers de CI → ci ;
+      documentation seule → docs ; tests seuls → test ; performance → perf.
+  - id: portee-facultative
+    text: "La portée (scope) est proposée depuis le répertoire/module dominant du diff."
+  - id: sujet-imperatif
+    text: "Sujet à l'impératif, ≤ 72 caractères, sans point final."
+  - id: pas-de-perte
+    text: >
+      Les références présentes (tickets, issues, URLs) sont conservées,
+      déplacées en pied de message (Refs:) si nécessaire.
+
+guardrails:
+  # Vérifiés PAR L'APPLICATION sur la proposition (post-conditions) :
+  - assert: preserves_references        # tout identifiant ticket/URL du message d'origine
+  - assert: preserves_protected_trailers
+  - assert: subject_matches
+    pattern: '^(feat|fix|refactor|chore|docs|test|ci|perf|build|style)(\([a-z0-9./-]+\))?(!)?: .{1,72}$'
+  - assert: no_auto_apply
+
+prompt_file: prompt.md
+
+examples:
+  - before: "fix stuff"
+    after: "fix(auth): handle expired refresh tokens on silent login"
+    note: "Le diff touchait src/auth/session.ts ; défaut corrigé → fix."
+  - before: "update JIRA-123 again"
+    after: |
+      feat(billing): add pro-rata computation for mid-cycle upgrades
+
+      Refs: JIRA-123
+    note: "Nouveau comportement → feat ; le ticket est conservé en pied."
+
+tests: tests/cases.yaml

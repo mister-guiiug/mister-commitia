@@ -1,0 +1,71 @@
+apiVersion: mister-commitia/skill.v1
+name: risk-reviewer
+version: 1.0.0
+owner: platform-team@example.org
+status: published
+description: >
+  Évalue les risques d'un plan de réécriture ou d'un job de nettoyage CI
+  avant application : branches partagées, signatures perdues, trailers
+  sensibles, volumétrie, références externes. Peut exiger une confirmation
+  renforcée ou bloquer tant que la validation explicite n'est pas donnée.
+
+scope:
+  repos: ["*"]
+  branches: ["*"]
+  operations: [report]
+
+risk_default: low
+
+inputs:
+  - plan                     # plan complet (opérations, cibles)
+  - repo.state               # branches partagées, protections, signatures GPG/SSH
+  - repo.governance
+  - cleanup.report           # le cas échéant : rapport de simulation CI
+
+output:
+  type: report
+  must_explain: true
+
+rules:
+  - id: axes-d-analyse
+    text: >
+      Axes évalués : partage (commits présents sur un remote), signatures
+      (commits signés dans le périmètre), gouvernance (trailers protégés,
+      politique IA), volumétrie (nombre d'opérations, profondeur du segment),
+      références externes (tags, PR connues), réversibilité (backup possible).
+  - id: verdict-par-axe
+    text: "Chaque axe reçoit un verdict ok / attention / bloquant, motivé."
+
+guardrails:
+  - assert: report_only
+  - assert: can_require_enhanced_confirmation   # verdict "attention" ⇒ confirmation renforcée exigée par l'app
+  - assert: can_block                           # verdict "bloquant" ⇒ l'application refuse tant que non levé
+  - assert: blocking_when
+    condition: "plan.targets_protected_branch == true"
+  - assert: blocking_when
+    condition: "plan.removes_protected_trailer == true"
+
+prompt: |
+  Évalue les risques du plan suivant avant application.
+  Plan : {{plan}}
+  État du dépôt : {{repo_state}}
+  Gouvernance : {{governance}}
+  Pour chaque axe (partage, signatures, gouvernance, volumétrie, références,
+  réversibilité) : verdict ok/attention/bloquant + motif + recommandation.
+  Réponds en JSON : {"axes": [{"axe": "...", "verdict": "...",
+  "motif": "...", "recommandation": "..."}], "verdict_global": "...",
+  "explication": "..."}
+
+tests:
+  - name: branche-protegee-bloque
+    given:
+      plan: { targets_protected_branch: true }
+    expect:
+      verdict_global: "bloquant"
+  - name: commits-signes-attention
+    given:
+      plan: { targets_protected_branch: false }
+      repo_state: { signed_commits_in_scope: 2, shared: false }
+    expect:
+      axis_verdict:
+        signatures: "attention"

@@ -1,0 +1,13 @@
+# OS
+Thumbs.db
+.DS_Store
+
+# Éditeurs
+.vscode/
+.idea/
+
+# Sorties locales
+*.log
+node_modules/
+target/
+dist/
