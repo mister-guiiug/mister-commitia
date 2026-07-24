@@ -203,14 +203,30 @@ impl GitEngine {
         tip: Oid,
         max: usize,
     ) -> Result<Vec<CommitInfo>> {
+        Self::segment_infos_cb(repo, base, tip, max, |_, _| Ok(()))
+    }
+
+    /// Variante avec point d'arrêt par commit : `on_each(i, total)` est appelé
+    /// AVANT la lecture du i-ème commit (1-indexé) — progression + annulation.
+    pub fn segment_infos_cb(
+        repo: &Repository,
+        base: Option<Oid>,
+        tip: Oid,
+        max: usize,
+        mut on_each: impl FnMut(usize, usize) -> Result<()>,
+    ) -> Result<Vec<CommitInfo>> {
         let mut oids = Self::segment(repo, base, tip)?;
         if oids.len() > max {
             oids = oids.split_off(oids.len() - max);
         }
         let remote_set = Self::remote_reachable(repo, base);
-        oids.iter()
-            .map(|o| Self::commit_info(repo, *o, &remote_set))
-            .collect()
+        let total = oids.len();
+        let mut out = Vec::with_capacity(total);
+        for (i, o) in oids.iter().enumerate() {
+            on_each(i + 1, total)?;
+            out.push(Self::commit_info(repo, *o, &remote_set)?);
+        }
+        Ok(out)
     }
 
     /// Patch unifié d'un commit (vs son premier parent), tronqué à `max_bytes`.

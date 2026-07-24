@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::error::{CoreError, Result};
 use crate::model::{CiAccount, CiRun};
+use crate::task::TaskCtx;
 
 use super::platform_error;
 
@@ -73,10 +74,11 @@ impl AzDoCi {
         ))
     }
 
-    pub async fn list_runs(&self, max: usize) -> Result<Vec<CiRun>> {
+    pub async fn list_runs(&self, max: usize, ctx: &TaskCtx) -> Result<Vec<CiRun>> {
         let mut out = Vec::new();
         let mut continuation: Option<String> = None;
         loop {
+            ctx.step("inventaire des builds", out.len() as u64, Some(max as u64))?;
             let mut url = format!(
                 "{}/{}/_apis/build/builds?$top=100&queryOrder=queueTimeDescending&api-version=7.1",
                 self.base, self.project

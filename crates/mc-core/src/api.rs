@@ -16,6 +16,7 @@ use crate::plan::{plan_hash, PlanEngine, RiskAxis};
 use crate::secrets;
 use crate::skills::{self, GenOutcome, Skill};
 use crate::store::Store;
+use crate::task::TaskCtx;
 
 pub struct Core {
     pub store: Store,
@@ -175,7 +176,18 @@ impl Core {
     // -- E2 : analyse --------------------------------------------------------
 
     pub fn repo_scan(&self, id: &str, branch: Option<String>) -> Result<ScanResult> {
+        self.repo_scan_with(id, branch, &TaskCtx::noop("repo_scan"))
+    }
+
+    /// Analyse avec progression (par commit lu) et annulation coopérative.
+    pub fn repo_scan_with(
+        &self,
+        id: &str,
+        branch: Option<String>,
+        ctx: &TaskCtx,
+    ) -> Result<ScanResult> {
         let mut r = self.store.repo_get(id)?;
+        ctx.step("ouverture du dépôt", 0, None)?;
         let repo = GitEngine::open(&r.local_path)?;
         let branch = branch
             .or_else(|| GitEngine::head_branch(&repo))
@@ -194,7 +206,10 @@ impl Core {
             }
             _ => None,
         };
-        let commits = GitEngine::segment_infos(&repo, base, tip, 500)?;
+        let commits = GitEngine::segment_infos_cb(&repo, base, tip, 500, |i, n| {
+            ctx.step("lecture des commits", i as u64, Some(n as u64))
+        })?;
+        ctx.step("analyse des messages", 0, None)?;
         let report = analyzer::analyze_commits(
             &r,
             &branch,
@@ -258,10 +273,14 @@ impl Core {
     }
 
     pub fn plan_dry_run(&self, plan_id: &str) -> Result<Plan> {
+        self.plan_dry_run_with(plan_id, &TaskCtx::noop("plan_dry_run"))
+    }
+
+    pub fn plan_dry_run_with(&self, plan_id: &str, ctx: &TaskCtx) -> Result<Plan> {
         let mut plan = self.store.plan_get(plan_id)?;
         let r = self.store.repo_get(&plan.repo_id)?;
         let repo = GitEngine::open(&r.local_path)?;
-        let outcome = PlanEngine::dry_run(&r, &repo, &mut plan);
+        let outcome = PlanEngine::dry_run(&r, &repo, &mut plan, ctx);
         match &outcome {
             Ok(()) => self.audit(
                 "git_rewrite",
@@ -283,10 +302,19 @@ impl Core {
     }
 
     pub fn plan_apply(&self, plan_id: &str, confirm: Option<String>) -> Result<Plan> {
+        self.plan_apply_with(plan_id, confirm, &TaskCtx::noop("plan_apply"))
+    }
+
+    pub fn plan_apply_with(
+        &self,
+        plan_id: &str,
+        confirm: Option<String>,
+        ctx: &TaskCtx,
+    ) -> Result<Plan> {
         let mut plan = self.store.plan_get(plan_id)?;
         let r = self.store.repo_get(&plan.repo_id)?;
         let repo = GitEngine::open(&r.local_path)?;
-        let outcome = PlanEngine::apply(&r, &repo, &mut plan, confirm.as_deref());
+        let outcome = PlanEngine::apply(&r, &repo, &mut plan, confirm.as_deref(), ctx);
         let result = match &outcome {
             Ok(()) => "ok".to_string(),
             Err(e) => format!("erreur : {e}"),
@@ -489,6 +517,30 @@ impl Core {
         provider_id: Option<String>,
         consent_remote: bool,
     ) -> Result<Vec<Proposal>> {
+        self.proposals_generate_with(
+            repo_id,
+            skill_name,
+            groups,
+            provider_id,
+            consent_remote,
+            &TaskCtx::noop("proposals_generate"),
+        )
+        .await
+    }
+
+    /// Variante événementielle (T11) : progression par groupe, fragments IA
+    /// streamés via `ctx.ai_delta`, budget de tokens réparti sur le lot,
+    /// annulation entre deux groupes (les propositions déjà générées restent
+    /// enregistrées et journalisées).
+    pub async fn proposals_generate_with(
+        &self,
+        repo_id: &str,
+        skill_name: &str,
+        groups: Vec<Vec<String>>,
+        provider_id: Option<String>,
+        consent_remote: bool,
+        task: &TaskCtx,
+    ) -> Result<Vec<Proposal>> {
         let r = self.store.repo_get(repo_id)?;
         let skill = self.skill_by_name(skill_name)?;
         let (provider, provider_label) = self.resolve_provider(provider_id.as_deref())?;
@@ -497,8 +549,11 @@ impl Core {
                 "envoi à un fournisseur IA distant : accord explicite requis, aperçu des données à l'appui".into(),
             ));
         }
+        let total = groups.len() as u64;
+        let max_tokens = ai::batch_max_tokens(groups.len());
         let mut out = Vec::new();
-        for shas in groups {
+        for (gi, shas) in groups.into_iter().enumerate() {
+            task.step("génération des propositions", gi as u64 + 1, Some(total))?;
             let commits = self.commits_by_shas(&r, &shas)?;
             let before = commits
                 .iter()
@@ -510,7 +565,9 @@ impl Core {
                 governance: &r.governance,
                 commits: &commits,
             };
-            let generated = ai::generate(&provider, &ctx).await;
+            let on_delta = |d: &str| task.ai_delta(gi as u64, d);
+            let generated =
+                ai::generate_with(&provider, &ctx, max_tokens, &task.cancel, Some(&on_delta)).await;
             let outcome = match generated {
                 Ok(o) => o,
                 Err(CoreError::Refused(msg)) => GenOutcome::Refusal { explanation: msg },
@@ -809,8 +866,18 @@ impl Core {
     }
 
     pub async fn ci_inventory(&self, account_id: &str, max: usize) -> Result<Vec<CiRun>> {
+        self.ci_inventory_with(account_id, max, &TaskCtx::noop("ci_inventory"))
+            .await
+    }
+
+    pub async fn ci_inventory_with(
+        &self,
+        account_id: &str,
+        max: usize,
+        ctx: &TaskCtx,
+    ) -> Result<Vec<CiRun>> {
         let (_, client) = self.client_for(account_id)?;
-        client.list_runs(max).await
+        client.list_runs_with(max, ctx).await
     }
 
     pub fn policy_save(&self, name: String, rules: RetentionRules) -> Result<RetentionPolicy> {
@@ -835,9 +902,21 @@ impl Core {
         policy_id: &str,
         max: usize,
     ) -> Result<SimulationReport> {
+        self.ci_simulate_with(account_id, policy_id, max, &TaskCtx::noop("ci_simulate"))
+            .await
+    }
+
+    pub async fn ci_simulate_with(
+        &self,
+        account_id: &str,
+        policy_id: &str,
+        max: usize,
+        ctx: &TaskCtx,
+    ) -> Result<SimulationReport> {
         let (account, client) = self.client_for(account_id)?;
         let policy = self.store.policy_get(policy_id)?;
-        let runs = client.list_runs(max).await?;
+        let runs = client.list_runs_with(max, ctx).await?;
+        ctx.step("application de la politique de rétention", 0, None)?;
         let report = ci::simulate(&policy, &account, &runs, chrono::Utc::now());
         let job = CleanupJob {
             id: new_id("job"),

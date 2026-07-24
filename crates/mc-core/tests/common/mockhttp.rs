@@ -6,13 +6,23 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
+/// Réponse scriptée : (statut, en-têtes, corps).
+pub type RespDef<'a> = (u16, &'a [(&'a str, &'a str)], &'a str);
+
+#[derive(Clone)]
+struct Response {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
 #[derive(Clone)]
 struct Route {
     method: String,
     path: String,
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: String,
+    /// File de réponses : chaque hit consomme la première tant qu'il en reste
+    /// plus d'une ; la dernière est servie indéfiniment (scénarios de retry).
+    responses: Vec<Response>,
 }
 
 #[derive(Clone)]
@@ -50,15 +60,27 @@ impl MockServer {
 
     /// Enregistre une réponse fixe pour (méthode, chemin exact hors query).
     pub fn add(&self, method: &str, path: &str, status: u16, headers: &[(&str, &str)], body: &str) {
+        self.add_seq(method, path, &[(status, headers, body)]);
+    }
+
+    /// Enregistre une SÉQUENCE de réponses pour (méthode, chemin) : la n-ième
+    /// requête reçoit la n-ième réponse, la dernière se répète (tests de
+    /// retry/backoff et de pagination).
+    pub fn add_seq(&self, method: &str, path: &str, responses: &[RespDef<'_>]) {
         self.routes.lock().unwrap().push(Route {
             method: method.to_uppercase(),
             path: path.to_string(),
-            status,
-            headers: headers
+            responses: responses
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .map(|(status, headers, body)| Response {
+                    status: *status,
+                    headers: headers
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    body: body.to_string(),
+                })
                 .collect(),
-            body: body.to_string(),
         });
     }
 
@@ -126,14 +148,21 @@ fn handle(
         .entry(format!("{method} {path}"))
         .or_insert(0) += 1;
 
-    let route = routes
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|r| r.method == method && r.path == path)
-        .cloned();
+    let response = {
+        let mut routes = routes.lock().unwrap();
+        routes
+            .iter_mut()
+            .find(|r| r.method == method && r.path == path)
+            .map(|r| {
+                if r.responses.len() > 1 {
+                    r.responses.remove(0)
+                } else {
+                    r.responses[0].clone()
+                }
+            })
+    };
 
-    let (status, headers, body) = match route {
+    let (status, headers, body) = match response {
         Some(r) => (r.status, r.headers, r.body),
         None => (
             404,

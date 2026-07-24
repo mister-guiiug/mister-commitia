@@ -2,6 +2,7 @@ mod common;
 
 use common::*;
 use mc_core::model::*;
+use mc_core::task::{CancelToken, TaskCtx, TaskEvent};
 
 /// CA-3 + CA-4 : le dry-run construit le résultat réel dans refs/mc/preview
 /// sans toucher la branche ; un plan 100 % reword ne change aucun arbre.
@@ -74,6 +75,57 @@ fn ca3_ca4_dry_run_reword_preserves_trees_and_branch() {
     assert!(msg.starts_with("refactor(pay): iterate on payment flow"));
     // Les commits AVANT le premier modifié gardent leur SHA (adressage contenu).
     assert_eq!(plan.mapping[0].old[0], plan.mapping[0].new);
+}
+
+/// T2 : un dry-run annulé n'écrit RIEN (pas de préview, statut inchangé) et
+/// les phases émises portent des libellés exploitables par l'UI.
+#[test]
+fn t2_dry_run_cancelled_writes_nothing_and_emits_phases() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/checkout").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Reword {
+                    target: shas[1].to_string(),
+                    new_message: "refactor(pay): iterate on payment flow".into(),
+                },
+            )],
+        )
+        .unwrap();
+
+    // Jeton déjà annulé → interruption avant tout travail Git.
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let ctx = TaskCtx::new("plan_dry_run", "t-dr", cancel, |_| {});
+    let err = core.plan_dry_run_with(&plan.id, &ctx).unwrap_err();
+    assert_eq!(err.code(), "cancelled");
+    let after = core.plan_get(&plan.id).unwrap();
+    assert_eq!(after.status, PlanStatus::Draft, "statut inchangé");
+    assert!(after.preview_ref.is_none());
+    assert!(
+        f.repo
+            .find_reference(&format!("refs/mc/preview/{}", plan.id))
+            .is_err(),
+        "aucune réf de préview créée"
+    );
+
+    // Exécution normale : les phases attendues sont émises, dans l'ordre.
+    let phases = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = phases.clone();
+    let ctx = TaskCtx::new("plan_dry_run", "t-dr2", CancelToken::new(), move |p| {
+        if let TaskEvent::Progress { phase, .. } = p.event {
+            sink.lock().unwrap().push(phase);
+        }
+    });
+    core.plan_dry_run_with(&plan.id, &ctx).unwrap();
+    let phases = phases.lock().unwrap();
+    assert_eq!(phases.first().unwrap(), "vérification de l'empreinte");
+    assert!(phases.iter().any(|p| p == "réécriture des messages"));
+    assert!(phases.iter().any(|p| p.contains("écriture de la préview")));
 }
 
 /// CA-3 : pas d'application sans dry-run du même plan.

@@ -1,7 +1,12 @@
 mod common;
 
+use std::sync::Mutex;
+
+use common::mockhttp::MockServer;
 use common::*;
+use mc_core::ai::Provider;
 use mc_core::model::*;
+use mc_core::task::{CancelToken, TaskCtx, TaskEvent};
 
 /// Les six skills du dépôt se chargent sans erreur.
 #[test]
@@ -277,6 +282,287 @@ fn skill_editor_rejects_unknown_names() {
     let core = mc_core::Core::in_memory(skills.path().to_path_buf()).unwrap();
     assert!(core.skill_read("../evil").is_err());
     assert!(core.skill_write("../evil", "name: x").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// T11 — streaming des réponses IA, retry/backoff, budget de tokens
+// ---------------------------------------------------------------------------
+
+fn openai_provider(server: &MockServer) -> Provider {
+    Provider::OpenAiCompat {
+        base_url: server.base_url(),
+        model: "modele-test".into(),
+        api_key: "cle-test".into(),
+    }
+}
+
+fn collect_stream(deltas: &Mutex<Vec<String>>) -> impl Fn(&str) + Send + Sync + '_ {
+    move |d: &str| deltas.lock().unwrap().push(d.to_string())
+}
+
+/// T11 : flux SSE OpenAI-compatible — un fragment par événement `data:`,
+/// arrêt sur `[DONE]`, texte complet reconstitué.
+#[tokio::test]
+async fn t11_streaming_openai_sse() {
+    let server = MockServer::start();
+    let sse = |c: &str| {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({"choices":[{"delta":{"content": c}}]})
+        )
+    };
+    let body = format!(
+        "data: {}\n\n{}{}data: [DONE]\n\n",
+        r#"{"choices":[{"delta":{"role":"assistant"}}]}"#,
+        sse("Bonjour"),
+        sse(" monde"),
+    );
+    server.add("POST", "/v1/chat/completions", 200, &[], &body);
+
+    let deltas = Mutex::new(Vec::new());
+    let full = openai_provider(&server)
+        .complete_streaming(
+            "sys",
+            "user",
+            512,
+            &CancelToken::new(),
+            &collect_stream(&deltas),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full, "Bonjour monde");
+    assert_eq!(*deltas.lock().unwrap(), vec!["Bonjour", " monde"]);
+}
+
+/// T11 : flux SSE Anthropic — `content_block_delta` → fragments, `message_stop`
+/// → fin ; les autres événements sont ignorés.
+#[tokio::test]
+async fn t11_streaming_anthropic_sse() {
+    let server = MockServer::start();
+    let ev = |t: &str| {
+        format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            serde_json::json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text": t}})
+        )
+    };
+    let body = format!(
+        "event: message_start\ndata: {}\n\n{}{}event: message_stop\ndata: {}\n\n",
+        r#"{"type":"message_start"}"#,
+        ev("Bon"),
+        ev("jour"),
+        r#"{"type":"message_stop"}"#,
+    );
+    server.add("POST", "/v1/messages", 200, &[], &body);
+
+    let provider = Provider::Anthropic {
+        base_url: server.base_url(),
+        model: "modele-test".into(),
+        api_key: "cle-test".into(),
+    };
+    let deltas = Mutex::new(Vec::new());
+    let full = provider
+        .complete_streaming(
+            "sys",
+            "user",
+            512,
+            &CancelToken::new(),
+            &collect_stream(&deltas),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full, "Bonjour");
+    assert_eq!(deltas.lock().unwrap().len(), 2);
+}
+
+/// T11 : flux NDJSON Ollama — une ligne JSON par fragment, `done: true` → fin.
+#[tokio::test]
+async fn t11_streaming_ollama_ndjson() {
+    let server = MockServer::start();
+    let body = concat!(
+        r#"{"message":{"role":"assistant","content":"Bon"},"done":false}"#,
+        "\n",
+        r#"{"message":{"role":"assistant","content":"jour"},"done":false}"#,
+        "\n",
+        r#"{"message":{"role":"assistant","content":""},"done":true}"#,
+        "\n",
+    );
+    server.add("POST", "/api/chat", 200, &[], body);
+
+    let provider = Provider::Ollama {
+        base_url: server.base_url(),
+        model: "modele-test".into(),
+    };
+    let deltas = Mutex::new(Vec::new());
+    let full = provider
+        .complete_streaming(
+            "sys",
+            "user",
+            512,
+            &CancelToken::new(),
+            &collect_stream(&deltas),
+        )
+        .await
+        .unwrap();
+    assert_eq!(full, "Bonjour");
+    assert_eq!(*deltas.lock().unwrap(), vec!["Bon", "jour"]);
+}
+
+/// T11 : l'annulation en COURS de flux interrompt à la ligne suivante.
+#[tokio::test]
+async fn t11_streaming_cancel_mid_stream() {
+    let server = MockServer::start();
+    let sse = |c: &str| {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({"choices":[{"delta":{"content": c}}]})
+        )
+    };
+    let body = format!(
+        "{}{}{}data: [DONE]\n\n",
+        sse("un"),
+        sse("deux"),
+        sse("trois")
+    );
+    server.add("POST", "/v1/chat/completions", 200, &[], &body);
+
+    let cancel = CancelToken::new();
+    let trigger = cancel.clone();
+    let deltas = Mutex::new(Vec::new());
+    let on_delta = move |d: &str| {
+        deltas.lock().unwrap().push(d.to_string());
+        trigger.cancel(); // annulation dès le premier fragment reçu
+    };
+    let err = openai_provider(&server)
+        .complete_streaming("sys", "user", 512, &cancel, &on_delta)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "cancelled");
+}
+
+/// T11 : réessai automatique — 429 (Retry-After) puis 200 → succès en 2 appels.
+#[tokio::test]
+async fn t11_retry_429_then_success() {
+    let server = MockServer::start();
+    server.add_seq(
+        "POST",
+        "/v1/chat/completions",
+        &[
+            (429, &[("retry-after", "0")], "{}"),
+            (
+                200,
+                &[],
+                r#"{"choices":[{"message":{"content":"ok apres retry"}}]}"#,
+            ),
+        ],
+    );
+    let out = openai_provider(&server)
+        .complete("sys", "user")
+        .await
+        .unwrap();
+    assert_eq!(out, "ok apres retry");
+    assert_eq!(server.hits("POST", "/v1/chat/completions"), 2);
+}
+
+/// T11 : réessais épuisés sur 5xx → erreur typée après exactement 3 essais.
+#[tokio::test]
+async fn t11_retry_exhausted_on_5xx() {
+    let server = MockServer::start();
+    server.add(
+        "POST",
+        "/v1/chat/completions",
+        500,
+        &[("retry-after", "0")],
+        r#"{"error":"boom"}"#,
+    );
+    let err = openai_provider(&server)
+        .complete("sys", "user")
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "http");
+    assert!(err.to_string().contains("HTTP 500"), "{err}");
+    assert_eq!(server.hits("POST", "/v1/chat/completions"), 3);
+}
+
+/// T11 : le budget de tokens d'un lot se répartit entre les groupes, borné
+/// [256, 1024] — un gros lot ne peut pas dériver en coût.
+#[test]
+fn t11_batch_token_budget_is_split_and_clamped() {
+    assert_eq!(mc_core::ai::batch_max_tokens(1), 1024);
+    assert_eq!(mc_core::ai::batch_max_tokens(16), 1024);
+    assert_eq!(mc_core::ai::batch_max_tokens(32), 512);
+    assert_eq!(mc_core::ai::batch_max_tokens(64), 256);
+    assert_eq!(mc_core::ai::batch_max_tokens(500), 256);
+}
+
+/// T11 bout-en-bout : génération via fournisseur distant mocké en SSE —
+/// fragments relayés par `ai_delta`, progression par groupe, garde-fous
+/// appliqués sur le texte reconstitué, proposition enregistrée.
+#[tokio::test]
+async fn t11_proposals_generate_streams_via_task_events() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let server = MockServer::start();
+    let outcome = r#"{"decision":"propose","message":"fix(pay): stabilize payment flow","explication":"via SSE","risque":"low"}"#;
+    let (part1, part2) = outcome.split_at(40);
+    let sse = |c: &str| {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({"choices":[{"delta":{"content": c}}]})
+        )
+    };
+    let body = format!("{}{}data: [DONE]\n\n", sse(part1), sse(part2));
+    server.add("POST", "/v1/chat/completions", 200, &[], &body);
+
+    core.ai_provider_save(
+        AiProviderKind::OpenAiCompat,
+        Some(server.base_url()),
+        Some("modele-test".into()),
+        Some("cle-secrete-abcdef".into()),
+        true,
+    )
+    .unwrap();
+
+    let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let ctx = TaskCtx::new(
+        "proposals_generate",
+        "t-gen",
+        CancelToken::new(),
+        move |p| sink.lock().unwrap().push(p.event),
+    );
+    // Consentement explicite donné (CA-9) — l'aperçu a été montré côté UI.
+    let proposals = core
+        .proposals_generate_with(
+            &repo_id,
+            "conventional-commits",
+            vec![vec![shas[1].to_string()]],
+            None,
+            true,
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].status, ProposalStatus::Proposed);
+    assert_eq!(
+        proposals[0].after.as_deref(),
+        Some("fix(pay): stabilize payment flow")
+    );
+
+    let events = events.lock().unwrap();
+    let streamed: String = events
+        .iter()
+        .filter_map(|e| match e {
+            TaskEvent::AiDelta { group: 0, delta } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(streamed, outcome, "fragments relayés dans l'ordre");
+    assert!(events.iter().any(|e| matches!(
+        e,
+        TaskEvent::Progress { phase, current: 1, total: Some(1) } if phase == "génération des propositions"
+    )));
 }
 
 /// Le runner de self-tests des skills passe en mode déterministe local.

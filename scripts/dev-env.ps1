@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Configure la session PowerShell pour développer mc-core sous Windows SANS
   Visual Studio (hôte rustup x86_64-pc-windows-gnu + llvm-mingw).
@@ -42,16 +42,23 @@ if (-not $LlvmMingwDir) {
 
 $bin = Join-Path $LlvmMingwDir "bin"
 
-# rustc invoque « dlltool.exe » par ce nom exact ; llvm-dlltool est autonome
-# (le dlltool GNU du self-contained exige un `as` absent).
-if (-not (Test-Path (Join-Path $bin "dlltool.exe"))) {
-    Copy-Item (Join-Path $bin "llvm-dlltool.exe") (Join-Path $bin "dlltool.exe")
+# Répertoire MINIMAL exposé au PATH : uniquement dlltool.exe (llvm-dlltool
+# renommé — rustc l'invoque par ce nom exact, et le dlltool GNU du
+# self-contained exige un `as` absent) + les DLLs runtime de llvm-mingw.
+# NE JAMAIS mettre tout le bin de llvm-mingw dans le PATH : son wrapper
+# x86_64-w64-mingw32-gcc (clang + lld) masquerait le linker self-contained de
+# rustup et le link échouerait sur -lgcc / -lgcc_eh.
+$dlltoolDir = Join-Path $LlvmMingwDir "dlltool-only"
+if (-not (Test-Path (Join-Path $dlltoolDir "dlltool.exe"))) {
+    New-Item -ItemType Directory -Force $dlltoolDir | Out-Null
+    Copy-Item (Join-Path $bin "llvm-dlltool.exe") (Join-Path $dlltoolDir "dlltool.exe")
+    Get-ChildItem (Join-Path $bin "*.dll") | Copy-Item -Destination $dlltoolDir
 }
 
 $selfContained = "$env:USERPROFILE\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
 
-$env:Path = "$bin;$selfContained;$cargoBin;$env:Path"
-$env:CC = Join-Path $bin "x86_64-w64-mingw32-clang.exe"
+$env:Path = "$dlltoolDir;$selfContained;$cargoBin;$env:Path"
+$env:CC = Join-Path $bin "x86_64-w64-mingw32-clang.exe"   # compilateur C (chemin complet, hors PATH)
 $env:AR = Join-Path $bin "llvm-ar.exe"
 $env:MC_SECRETS_MODE = "memory"   # tests : coffre en mémoire (pas de pollution du Credential Manager)
 

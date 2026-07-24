@@ -16,6 +16,7 @@ pub mod plan;
 pub mod secrets;
 pub mod skills;
 pub mod store;
+pub mod task;
 
 pub use api::Core;
 pub use error::{CoreError, Result};

@@ -87,3 +87,23 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > des opérations longues (un même chantier événementiel).
 > Vérifié : 35 tests cœur verts (dont reorder et éditeur), parcours navigateur rejoués
 > (onboarding, diff, réordonnancement, édition de skill persistée + auditée).
+
+> **Lot 3 livré le 2026-07-25** (le chantier événementiel) : T2 **complet** — progression
+> des opérations longues émise sur un canal unique `mc://task` (scan par commit lu, dry-run
+> par étape — empreinte, sequencer, réécriture des messages, invariants —, application,
+> inventaire et simulation CI par page d'API) et **annulation coopérative** par jeton
+> (`task_cancel`, code d'erreur stable `cancelled`, arrêt aux points sûrs uniquement ;
+> les points de non-retour — backup puis bascule — ne sont jamais interrompus et le
+> sequencer git est tué proprement avec nettoyage du worktree). T11 — **streaming des
+> réponses IA** (SSE OpenAI-compatible et Anthropic, NDJSON Ollama, fragments relayés en
+> direct dans l'UI), **réessais automatiques** avec backoff exponentiel plafonné par
+> `Retry-After` (429/5xx/réseau, 3 essais), **budget de tokens par lot** réparti entre
+> les groupes (borné [256, 1024]).
+> Vérifié : 47 tests cœur verts (annulation sans effet de bord — préview jamais créée,
+> pagination interrompue sans requête suivante —, 3 protocoles de flux, annulation en
+> cours de flux, retry 429→200, épuisement 5xx, bout-en-bout SSE→événements de tâche) ;
+> parcours navigateur rejoués (barres de progression annulables, flux IA affiché en
+> direct, annulation en cours de génération conservant les propositions déjà produites).
+> Au passage, `scripts/dev-env.ps1` corrigé : BOM UTF-8 (requis par PowerShell 5.1) et
+> PATH minimal `dlltool-only` — exposer tout le `bin` de llvm-mingw masquait le linker
+> self-contained de rustup (échec sur `-lgcc`/`-lgcc_eh`).

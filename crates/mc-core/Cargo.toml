@@ -24,6 +24,9 @@ keyring = { version = "3", features = ["windows-native", "apple-native", "sync-s
 # native-tls : schannel sous Windows (magasin de certificats système, compatible
 # proxys TLS d'entreprise), openssl sous Linux, Security.framework sous macOS.
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+# timers uniquement : attentes annulables du retry/backoff IA (T11) — le
+# runtime lui-même est fourni par l'appelant (Tauri ou #[tokio::test]).
+tokio = { version = "1", default-features = false, features = ["time"] }
 
 [dev-dependencies]
 tempfile = "3"

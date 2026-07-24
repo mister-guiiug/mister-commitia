@@ -1,8 +1,11 @@
 mod common;
 
+use std::sync::{Arc, Mutex};
+
 use common::*;
 use mc_core::gitx::GitEngine;
 use mc_core::model::FlagKind;
+use mc_core::task::{CancelToken, TaskCtx, TaskEvent, TaskPayload};
 
 /// CA-2 : l'analyse détecte messages faibles, non-conformité et mentions
 /// générées — sans AUCUN effet de bord sur le dépôt.
@@ -59,6 +62,67 @@ fn commit_diff_returns_unified_patch() {
     assert!(patch.contains("diff --git"), "{patch}");
     assert!(patch.contains("src/pay.rs"));
     assert!(patch.contains("+pub fn pay()"));
+}
+
+/// T2 : le scan émet une progression par commit (task_id propagé) et un jeton
+/// déjà annulé interrompt AVANT tout travail (code stable `cancelled`).
+#[test]
+fn t2_scan_progress_events_and_precancelled_token() {
+    let (f, _shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+
+    let events: Arc<Mutex<Vec<TaskPayload>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let ctx = TaskCtx::new("repo_scan", "t-scan", CancelToken::new(), move |p| {
+        sink.lock().unwrap().push(p)
+    });
+    core.repo_scan_with(&repo_id, Some("feature/checkout".into()), &ctx)
+        .unwrap();
+
+    let events = events.lock().unwrap();
+    assert!(events.iter().all(|p| p.task_id == "t-scan"));
+    let reads: Vec<(u64, Option<u64>)> = events
+        .iter()
+        .filter_map(|p| match &p.event {
+            TaskEvent::Progress {
+                phase,
+                current,
+                total,
+            } if phase == "lecture des commits" => Some((*current, *total)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reads.len(), 4, "une émission par commit du segment");
+    assert_eq!(reads.last().unwrap(), &(4, Some(4)));
+
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let ctx = TaskCtx::new("repo_scan", "t-annule", cancel, |_| {});
+    let err = core
+        .repo_scan_with(&repo_id, Some("feature/checkout".into()), &ctx)
+        .unwrap_err();
+    assert_eq!(err.code(), "cancelled");
+}
+
+/// T2 : l'annulation en COURS de scan interrompt au point d'arrêt suivant.
+#[test]
+fn t2_scan_cancel_mid_flight_stops_at_next_checkpoint() {
+    let (f, _shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+
+    let cancel = CancelToken::new();
+    let trigger = cancel.clone();
+    let ctx = TaskCtx::new("repo_scan", "t-vol", cancel, move |p| {
+        if let TaskEvent::Progress { phase, current, .. } = &p.event {
+            if phase == "lecture des commits" && *current == 2 {
+                trigger.cancel(); // annulation déclenchée pendant la lecture
+            }
+        }
+    });
+    let err = core
+        .repo_scan_with(&repo_id, Some("feature/checkout".into()), &ctx)
+        .unwrap_err();
+    assert_eq!(err.code(), "cancelled");
 }
 
 #[test]

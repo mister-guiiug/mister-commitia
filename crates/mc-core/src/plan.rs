@@ -8,6 +8,7 @@ use crate::error::{CoreError, Result};
 use crate::gitx::rewrite::{self, TodoGroup};
 use crate::gitx::GitEngine;
 use crate::model::*;
+use crate::task::TaskCtx;
 
 pub fn plan_hash(fingerprint: &Fingerprint, ops: &[PlanOp]) -> String {
     let payload = serde_json::json!({ "fingerprint": fingerprint, "ops": ops });
@@ -320,11 +321,17 @@ impl PlanEngine {
 
     /// Construit RÉELLEMENT le résultat du plan dans `refs/mc/preview/<id>`
     /// sans toucher la branche, vérifie les invariants, calcule le mapping.
-    pub fn dry_run(repo_ref: &RepoRef, repo: &Repository, plan: &mut Plan) -> Result<()> {
+    pub fn dry_run(
+        repo_ref: &RepoRef,
+        repo: &Repository,
+        plan: &mut Plan,
+        ctx: &TaskCtx,
+    ) -> Result<()> {
         Self::ensure_not_protected(repo_ref, &plan.fingerprint.branch)?;
         if plan.ops.is_empty() {
             return Err(CoreError::Invalid("plan sans opération".into()));
         }
+        ctx.step("vérification de l'empreinte", 0, None)?;
         let (base, tip) = Self::check_fingerprint(repo, plan)?;
         let segment = GitEngine::segment(repo, Some(base), tip)?;
         for oid in &segment {
@@ -334,10 +341,12 @@ impl PlanEngine {
                 ));
             }
         }
+        ctx.step("compilation du plan", 0, None)?;
         let compiled = compile(&segment, &plan.ops)?;
 
         let (final_tip, mapping) = if !compiled.structure_changed {
-            let (new_tip, map) = rewrite::reword_chain(repo, Some(base), tip, &compiled.messages)?;
+            let (new_tip, map) =
+                rewrite::reword_chain(repo, Some(base), tip, &compiled.messages, ctx)?;
             // Invariant CA-4 : un reword ne change jamais les arbres.
             for (old, new) in &map {
                 let t_old = repo.find_commit(*old)?.tree_id();
@@ -357,14 +366,16 @@ impl PlanEngine {
                 .collect::<Vec<_>>();
             (new_tip, mapping)
         } else {
-            let (h1, groupmap) = rewrite::sequencer_rebase(repo, base, tip, &compiled.groups)?;
+            ctx.step("rejeu de la structure (sequencer git)", 0, None)?;
+            let (h1, groupmap) =
+                rewrite::sequencer_rebase(repo, base, tip, &compiled.groups, &ctx.cancel)?;
             let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
             for (group, new_oid) in &groupmap {
                 if let Some(m) = compiled.messages.get(&group.leader) {
                     msg_by_new.insert(*new_oid, m.clone());
                 }
             }
-            let (h2, map2) = rewrite::reword_chain(repo, Some(base), h1, &msg_by_new)?;
+            let (h2, map2) = rewrite::reword_chain(repo, Some(base), h1, &msg_by_new, ctx)?;
             if !compiled.has_drop {
                 let t_old = repo.find_commit(tip)?.tree_id();
                 let t_new = repo.find_commit(h2)?.tree_id();
@@ -388,6 +399,7 @@ impl PlanEngine {
             (h2, mapping)
         };
 
+        ctx.step("contrôle des invariants et écriture de la préview", 0, None)?;
         let preview = format!("refs/mc/preview/{}", plan.id);
         repo.reference(&preview, final_tip, true, "mister-commitia dry-run")?;
         plan.preview_ref = Some(preview);
@@ -406,7 +418,13 @@ impl PlanEngine {
         repo: &Repository,
         plan: &mut Plan,
         confirm: Option<&str>,
+        ctx: &TaskCtx,
     ) -> Result<()> {
+        ctx.step(
+            "contrôles préalables (empreinte, préview, partage)",
+            0,
+            None,
+        )?;
         Self::ensure_not_protected(repo_ref, &plan.fingerprint.branch)?;
         if plan.status != PlanStatus::DryRunOk {
             return Err(CoreError::Refused(
@@ -452,6 +470,10 @@ impl PlanEngine {
             ));
         }
 
+        // Dernier point d'annulation : au-delà, backup puis bascule vont au
+        // bout — jamais d'état intermédiaire.
+        ctx.step("création du backup", 0, None)?;
+
         // Backup obligatoire (CA-1) — son échec annule tout.
         let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
         let short = plan.id.chars().rev().take(6).collect::<String>();
@@ -465,6 +487,7 @@ impl PlanEngine {
             ));
         }
 
+        ctx.emit("bascule de la branche (non annulable)", 0, None);
         if checked_out {
             let dir = repo
                 .workdir()

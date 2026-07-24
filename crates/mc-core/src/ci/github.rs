@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::error::{CoreError, Result};
 use crate::model::{CiAccount, CiRun};
+use crate::task::TaskCtx;
 
 use super::platform_error;
 
@@ -62,10 +63,11 @@ impl GithubCi {
         ))
     }
 
-    pub async fn list_runs(&self, max: usize) -> Result<Vec<CiRun>> {
+    pub async fn list_runs(&self, max: usize, ctx: &TaskCtx) -> Result<Vec<CiRun>> {
         let mut out = Vec::new();
         let mut page = 1u32;
         while out.len() < max {
+            ctx.step("inventaire des runs", out.len() as u64, Some(max as u64))?;
             let url = format!(
                 "{}/repos/{}/{}/actions/runs?per_page=100&page={page}",
                 self.base, self.owner, self.repo

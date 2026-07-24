@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::error::{CoreError, Result};
 use crate::model::*;
 use crate::skills::{GenOutcome, Skill};
+use crate::task::CancelToken;
 
 pub struct SkillContext<'a> {
     pub skill: &'a Skill,
@@ -43,6 +44,177 @@ pub enum Provider {
     },
 }
 
+/// Protocole de flux du fournisseur : NDJSON (Ollama) ou SSE (OpenAI-compat,
+/// Anthropic). Sert aussi à extraire la réponse en mode non-streamé.
+#[derive(Debug, Clone, Copy)]
+enum Wire {
+    OllamaNdjson,
+    OpenAiSse,
+    AnthropicSse,
+}
+
+/// Nombre total d'essais (1 appel + 2 réessais) sur 429 / 5xx / réseau.
+const MAX_ATTEMPTS: u32 = 3;
+/// Plafond de génération par groupe quand aucun budget de lot ne s'applique.
+pub const DEFAULT_MAX_TOKENS: u32 = 1024;
+/// Budget de tokens d'un LOT de génération (T11) : réparti entre les groupes.
+const BATCH_TOKEN_BUDGET: u32 = 16_384;
+
+/// Budget par groupe pour un lot de `groups` groupes, borné [256, 1024].
+pub fn batch_max_tokens(groups: usize) -> u32 {
+    (BATCH_TOKEN_BUDGET / groups.max(1) as u32).clamp(256, DEFAULT_MAX_TOKENS)
+}
+
+/// Attente annulable (tranches de 100 ms) — utilisée entre deux essais.
+async fn sleep_cancellable(secs: u64, cancel: &CancelToken) -> Result<()> {
+    let mut remaining_ms = secs.saturating_mul(1000);
+    while remaining_ms > 0 {
+        cancel.check()?;
+        let tick = remaining_ms.min(100);
+        tokio::time::sleep(std::time::Duration::from_millis(tick)).await;
+        remaining_ms -= tick;
+    }
+    cancel.check()
+}
+
+fn retry_after_secs(resp: &reqwest::Response) -> Option<u64> {
+    resp.headers()
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Envoie la requête avec réessais et backoff exponentiel (1 s, 2 s — plafonné
+/// par `Retry-After` quand le serveur l'indique). Ne retourne que des réponses
+/// 2xx ; les échecs définitifs deviennent des erreurs typées (`rate_limited`,
+/// `http`). Chaque attente est un point d'annulation.
+async fn send_with_retry(
+    req: reqwest::RequestBuilder,
+    what: &str,
+    cancel: &CancelToken,
+) -> Result<reqwest::Response> {
+    let mut attempt = 0u32;
+    loop {
+        cancel.check()?;
+        attempt += 1;
+        let this = req
+            .try_clone()
+            .ok_or_else(|| CoreError::Invalid("requête IA non clonable".into()))?;
+        match this.send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(resp),
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let retry_after = retry_after_secs(&resp);
+                let retriable = status == 429 || (500..=599).contains(&status);
+                if !retriable || attempt >= MAX_ATTEMPTS {
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(if status == 429 {
+                        CoreError::RateLimited {
+                            retry_after_secs: retry_after.unwrap_or(60),
+                        }
+                    } else {
+                        CoreError::Http(format!("{what} : HTTP {status} — {body:.300}"))
+                    });
+                }
+                let delay = retry_after.unwrap_or(1u64 << (attempt - 1)).min(30);
+                tracing::warn!(
+                    target: "mc::ai",
+                    statut = status,
+                    essai = attempt,
+                    attente_s = delay,
+                    "réponse transitoire du fournisseur : réessai"
+                );
+                sleep_cancellable(delay, cancel).await?;
+            }
+            Err(e) => {
+                if !(e.is_timeout() || e.is_connect()) || attempt >= MAX_ATTEMPTS {
+                    return Err(e.into());
+                }
+                let delay = (1u64 << (attempt - 1)).min(30);
+                tracing::warn!(
+                    target: "mc::ai",
+                    essai = attempt,
+                    attente_s = delay,
+                    "erreur réseau vers le fournisseur : réessai"
+                );
+                sleep_cancellable(delay, cancel).await?;
+            }
+        }
+    }
+}
+
+/// Fragment analysé d'une ligne de flux.
+#[derive(Default)]
+struct StreamItem {
+    delta: Option<String>,
+    done: bool,
+}
+
+fn parse_stream_line(wire: Wire, line: &str) -> Result<StreamItem> {
+    match wire {
+        Wire::OllamaNdjson => {
+            let v: Value = serde_json::from_str(line)
+                .map_err(|e| CoreError::Http(format!("flux ollama illisible : {e}")))?;
+            if let Some(err) = v["error"].as_str() {
+                return Err(CoreError::Http(format!("ollama : {err}")));
+            }
+            let delta = v["message"]["content"].as_str().unwrap_or_default();
+            Ok(StreamItem {
+                delta: (!delta.is_empty()).then(|| delta.to_string()),
+                done: v["done"].as_bool().unwrap_or(false),
+            })
+        }
+        Wire::OpenAiSse => {
+            let Some(payload) = line.strip_prefix("data:").map(str::trim_start) else {
+                return Ok(StreamItem::default()); // commentaire SSE / event: — ignoré
+            };
+            if payload == "[DONE]" {
+                return Ok(StreamItem {
+                    delta: None,
+                    done: true,
+                });
+            }
+            let v: Value = serde_json::from_str(payload)
+                .map_err(|e| CoreError::Http(format!("flux SSE illisible : {e}")))?;
+            let delta = v["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap_or_default();
+            Ok(StreamItem {
+                delta: (!delta.is_empty()).then(|| delta.to_string()),
+                done: false,
+            })
+        }
+        Wire::AnthropicSse => {
+            let Some(payload) = line.strip_prefix("data:").map(str::trim_start) else {
+                return Ok(StreamItem::default());
+            };
+            let v: Value = serde_json::from_str(payload)
+                .map_err(|e| CoreError::Http(format!("flux SSE illisible : {e}")))?;
+            match v["type"].as_str().unwrap_or_default() {
+                "content_block_delta" => {
+                    let delta = v["delta"]["text"].as_str().unwrap_or_default();
+                    Ok(StreamItem {
+                        delta: (!delta.is_empty()).then(|| delta.to_string()),
+                        done: false,
+                    })
+                }
+                "message_stop" => Ok(StreamItem {
+                    delta: None,
+                    done: true,
+                }),
+                "error" => Err(CoreError::Http(format!(
+                    "anthropic : {}",
+                    v["error"]["message"].as_str().unwrap_or("erreur de flux")
+                ))),
+                _ => Ok(StreamItem::default()),
+            }
+        }
+    }
+}
+
 impl Provider {
     pub fn is_remote(&self) -> bool {
         matches!(
@@ -51,37 +223,31 @@ impl Provider {
         )
     }
 
-    pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()?;
+    /// Construit la requête (streamée ou non) du fournisseur.
+    fn request(
+        &self,
+        client: &reqwest::Client,
+        system: &str,
+        user: &str,
+        stream: bool,
+        max_tokens: u32,
+    ) -> Result<(reqwest::RequestBuilder, Wire, &'static str)> {
         match self {
             Provider::RuleBased => Err(CoreError::Invalid(
                 "le provider local déterministe ne fait pas d'appel LLM".into(),
             )),
             Provider::Ollama { base_url, model } => {
                 let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
-                let resp = client
-                    .post(url)
-                    .json(&serde_json::json!({
-                        "model": model,
-                        "stream": false,
-                        "messages": [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user}
-                        ]
-                    }))
-                    .send()
-                    .await?;
-                let status = resp.status();
-                let v: Value = resp.json().await?;
-                if !status.is_success() {
-                    return Err(CoreError::Http(format!("ollama {status} : {v}")));
-                }
-                Ok(v["message"]["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string())
+                let req = client.post(url).json(&serde_json::json!({
+                    "model": model,
+                    "stream": stream,
+                    "options": {"num_predict": max_tokens},
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user}
+                    ]
+                }));
+                Ok((req, Wire::OllamaNdjson, "ollama"))
             }
             Provider::OpenAiCompat {
                 base_url,
@@ -89,27 +255,19 @@ impl Provider {
                 api_key,
             } => {
                 let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
-                let resp = client
+                let req = client
                     .post(url)
                     .bearer_auth(api_key)
                     .json(&serde_json::json!({
                         "model": model,
+                        "stream": stream,
+                        "max_tokens": max_tokens,
                         "messages": [
                             {"role": "system", "content": system},
                             {"role": "user", "content": user}
                         ]
-                    }))
-                    .send()
-                    .await?;
-                let status = resp.status();
-                let v: Value = resp.json().await?;
-                if !status.is_success() {
-                    return Err(CoreError::Http(format!("endpoint {status} : {v}")));
-                }
-                Ok(v["choices"][0]["message"]["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string())
+                    }));
+                Ok((req, Wire::OpenAiSse, "endpoint OpenAI-compatible"))
             }
             Provider::Anthropic {
                 base_url,
@@ -117,29 +275,99 @@ impl Provider {
                 api_key,
             } => {
                 let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
-                let resp = client
+                let req = client
                     .post(url)
                     .header("x-api-key", api_key)
                     .header("anthropic-version", "2023-06-01")
                     .json(&serde_json::json!({
                         "model": model,
-                        "max_tokens": 1024,
+                        "stream": stream,
+                        "max_tokens": max_tokens,
                         "system": system,
                         "messages": [{"role": "user", "content": user}]
-                    }))
-                    .send()
-                    .await?;
-                let status = resp.status();
-                let v: Value = resp.json().await?;
-                if !status.is_success() {
-                    return Err(CoreError::Http(format!("anthropic {status} : {v}")));
-                }
-                Ok(v["content"][0]["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string())
+                    }));
+                Ok((req, Wire::AnthropicSse, "anthropic"))
             }
         }
+    }
+
+    pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
+        self.complete_opts(system, user, DEFAULT_MAX_TOKENS, &CancelToken::new())
+            .await
+    }
+
+    /// Complétion non streamée, avec réessais/backoff et annulation.
+    pub async fn complete_opts(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+        cancel: &CancelToken,
+    ) -> Result<String> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()?;
+        let (req, wire, label) = self.request(&client, system, user, false, max_tokens)?;
+        let resp = send_with_retry(req, label, cancel).await?;
+        let v: Value = resp.json().await?;
+        Ok(match wire {
+            Wire::OllamaNdjson => v["message"]["content"].as_str().unwrap_or_default(),
+            Wire::OpenAiSse => v["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or_default(),
+            Wire::AnthropicSse => v["content"][0]["text"].as_str().unwrap_or_default(),
+        }
+        .to_string())
+    }
+
+    /// Complétion STREAMÉE (T11) : `on_delta` reçoit chaque fragment de texte
+    /// dès son arrivée ; retourne le texte complet. L'annulation est vérifiée
+    /// à chaque ligne du flux ; les réessais ne portent que sur l'ouverture de
+    /// la requête (un flux entamé n'est jamais rejoué).
+    pub async fn complete_streaming(
+        &self,
+        system: &str,
+        user: &str,
+        max_tokens: u32,
+        cancel: &CancelToken,
+        on_delta: &(dyn Fn(&str) + Send + Sync),
+    ) -> Result<String> {
+        // Pas de timeout GLOBAL : une génération longue est légitime ; on borne
+        // l'établissement de la connexion et le silence entre deux fragments.
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .read_timeout(std::time::Duration::from_secs(120))
+            .build()?;
+        let (req, wire, label) = self.request(&client, system, user, true, max_tokens)?;
+        let mut resp = send_with_retry(req, label, cancel).await?;
+        let mut buf: Vec<u8> = Vec::new();
+        let mut full = String::new();
+        'flux: while let Some(chunk) = resp.chunk().await? {
+            buf.extend_from_slice(&chunk);
+            // Découpe par ligne complète : '\n' n'apparaît jamais au milieu
+            // d'une séquence UTF-8 multi-octets, la conversion est donc sûre.
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = buf.drain(..=pos).collect();
+                cancel.check()?;
+                let line = String::from_utf8_lossy(&line);
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let item = parse_stream_line(wire, line).map_err(|e| match e {
+                    CoreError::Http(m) => CoreError::Http(format!("{label} : {m}")),
+                    e => e,
+                })?;
+                if let Some(d) = item.delta {
+                    full.push_str(&d);
+                    on_delta(&d);
+                }
+                if item.done {
+                    break 'flux;
+                }
+            }
+        }
+        Ok(full)
     }
 }
 
@@ -274,6 +502,18 @@ fn parse_llm_outcome(raw: &str) -> Result<GenOutcome> {
 /// Point d'entrée de génération. La gouvernance est court-circuitée AVANT tout
 /// appel réseau ; les garde-fous applicatifs sont revalidés par l'appelant.
 pub async fn generate(provider: &Provider, ctx: &SkillContext<'_>) -> Result<GenOutcome> {
+    generate_with(provider, ctx, DEFAULT_MAX_TOKENS, &CancelToken::new(), None).await
+}
+
+/// Variante streamée/annulable : `on_delta` (si fourni) reçoit chaque fragment
+/// de texte au fil de la génération (T11). Mêmes garde-fous que `generate`.
+pub async fn generate_with(
+    provider: &Provider,
+    ctx: &SkillContext<'_>,
+    max_tokens: u32,
+    cancel: &CancelToken,
+    on_delta: Option<&(dyn Fn(&str) + Send + Sync)>,
+) -> Result<GenOutcome> {
     if ctx.skill.def.name == "ai-signature-cleaner"
         && ctx.governance.ai_attribution_policy == AiAttributionPolicy::KeepRequired
     {
@@ -284,10 +524,24 @@ pub async fn generate(provider: &Provider, ctx: &SkillContext<'_>) -> Result<Gen
         });
     }
     match provider {
-        Provider::RuleBased => rule_based::generate(ctx),
+        Provider::RuleBased => {
+            cancel.check()?;
+            rule_based::generate(ctx)
+        }
         _ => {
             let (system, user) = build_prompts(ctx);
-            let raw = provider.complete(&system, &user).await?;
+            let raw = match on_delta {
+                Some(cb) => {
+                    provider
+                        .complete_streaming(&system, &user, max_tokens, cancel, cb)
+                        .await?
+                }
+                None => {
+                    provider
+                        .complete_opts(&system, &user, max_tokens, cancel)
+                        .await?
+                }
+            };
             parse_llm_outcome(&raw)
         }
     }

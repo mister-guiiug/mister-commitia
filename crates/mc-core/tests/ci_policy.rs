@@ -3,6 +3,7 @@ mod common;
 use chrono::{Duration, Utc};
 use common::mockhttp::MockServer;
 use mc_core::model::*;
+use mc_core::task::{CancelToken, TaskCtx, TaskEvent};
 
 fn run(id: &str, pipeline: &str, days_ago: i64, leased: bool, running: bool) -> CiRun {
     CiRun {
@@ -253,6 +254,82 @@ async fn ca12_azdo_lease_recheck_blocks_delete() {
         .to_string();
     assert!(err.contains("lease"), "{err}");
     assert_eq!(server.hits("DELETE", "/proj/_apis/build/builds/55"), 0);
+}
+
+fn github_page_json(count: usize, first_id: i64) -> String {
+    let runs: Vec<serde_json::Value> = (0..count)
+        .map(|i| {
+            serde_json::json!({
+                "id": first_id + i as i64, "name": "CI", "workflow_id": 9,
+                "status": "completed", "conclusion": "success",
+                "head_branch": "develop", "created_at": "2026-01-01T00:00:00Z",
+                "html_url": "http://x"
+            })
+        })
+        .collect();
+    serde_json::json!({"total_count": count, "workflow_runs": runs}).to_string()
+}
+
+/// T2 : l'inventaire paginé émet une progression PAR PAGE et l'annulation
+/// entre deux pages interrompt sans émettre la requête suivante.
+#[tokio::test]
+async fn t2_inventory_progress_per_page_and_cancel_between_pages() {
+    let server = MockServer::start();
+    let path = "/repos/o/r/actions/runs";
+    // Page 1 : 100 runs (pleine → une page suit) ; page 2 : 2 runs (fin).
+    server.add_seq(
+        "GET",
+        path,
+        &[
+            (200, &[], &github_page_json(100, 1000)),
+            (200, &[], &github_page_json(2, 2000)),
+        ],
+    );
+    let acct = account(&server.base_url(), CiKind::Github);
+    let client = mc_core::ci::CiClient::from_account(&acct, "t-secret-2".into()).unwrap();
+
+    let progress = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let sink = progress.clone();
+    let ctx = TaskCtx::new("ci_inventory", "t-inv", CancelToken::new(), move |p| {
+        if let TaskEvent::Progress { current, .. } = p.event {
+            sink.lock().unwrap().push(current);
+        }
+    });
+    let runs = client.list_runs_with(500, &ctx).await.unwrap();
+    assert_eq!(runs.len(), 102);
+    assert_eq!(*progress.lock().unwrap(), vec![0, 100]);
+    assert_eq!(server.hits("GET", path), 2);
+
+    // Annulation pendant la première page (déclenchée par l'émission qui la
+    // précède) : le point d'arrêt AVANT la page 2 interrompt — la seconde
+    // requête n'est JAMAIS émise.
+    let server2 = MockServer::start();
+    server2.add_seq(
+        "GET",
+        path,
+        &[
+            (200, &[], &github_page_json(100, 1000)),
+            (200, &[], &github_page_json(2, 2000)),
+        ],
+    );
+    let acct2 = account(&server2.base_url(), CiKind::Github);
+    let client2 = mc_core::ci::CiClient::from_account(&acct2, "t-secret-3".into()).unwrap();
+    let cancel = CancelToken::new();
+    let trigger = cancel.clone();
+    let ctx = TaskCtx::new("ci_inventory", "t-inv2", cancel, move |p| {
+        if let TaskEvent::Progress { current, .. } = p.event {
+            if current == 0 {
+                trigger.cancel();
+            }
+        }
+    });
+    let err = client2.list_runs_with(500, &ctx).await.unwrap_err();
+    assert_eq!(err.code(), "cancelled");
+    assert_eq!(
+        server2.hits("GET", path),
+        1,
+        "aucune requête après l'annulation"
+    );
 }
 
 /// Inventaire Azure DevOps : keepForever/retainedByRelease ⇒ marqué retenu.

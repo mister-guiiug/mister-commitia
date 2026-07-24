@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use git2::{Oid, Repository};
 
 use crate::error::{CoreError, Result};
+use crate::task::{CancelToken, TaskCtx};
 
 use super::GitEngine;
 
@@ -25,11 +26,14 @@ pub fn reword_chain(
     base: Option<Oid>,
     tip: Oid,
     messages: &HashMap<Oid, String>,
+    ctx: &TaskCtx,
 ) -> Result<(Oid, HashMap<Oid, Oid>)> {
     let segment = GitEngine::segment(repo, base, tip)?;
+    let total = segment.len() as u64;
     let mut map = HashMap::new();
     let mut new_parent: Option<Oid> = base;
-    for oid in segment {
+    for (i, oid) in segment.into_iter().enumerate() {
+        ctx.step("réécriture des messages", i as u64 + 1, Some(total))?;
         let c = repo.find_commit(oid)?;
         if c.parent_count() > 1 {
             return Err(CoreError::Refused(
@@ -92,6 +96,55 @@ pub(crate) fn run_git(dir: &Path, args: &[&str], envs: &[(&str, String)]) -> Res
     }
 }
 
+/// Variante annulable : le processus git est TUÉ si le jeton passe à annulé
+/// (l'appelant nettoie ensuite — `rebase --abort` + suppression du worktree).
+/// Les sorties restent bornées (messages du sequencer) : pas de risque de
+/// saturation du pipe pendant l'attente.
+pub(crate) fn run_git_cancellable(
+    dir: &Path,
+    args: &[&str],
+    envs: &[(&str, String)],
+    cancel: &CancelToken,
+) -> Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| CoreError::Git(format!("exécution de git : {e}")))?;
+    loop {
+        if cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CoreError::Cancelled);
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(e) => return Err(CoreError::Git(format!("attente de git : {e}"))),
+        }
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| CoreError::Git(format!("sortie de git : {e}")))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(CoreError::Git(format!(
+            "git {} : {}",
+            args.first().unwrap_or(&""),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
+}
+
 /// Rejoue le segment `base..tip` selon la structure donnée (ordre des groupes,
 /// fixups, drops) via le sequencer natif de Git, dans un worktree temporaire
 /// détaché — la branche d'origine n'est jamais touchée. Retourne le nouveau
@@ -101,6 +154,7 @@ pub fn sequencer_rebase(
     base: Oid,
     tip: Oid,
     groups: &[TodoGroup],
+    cancel: &CancelToken,
 ) -> Result<(Oid, Vec<(TodoGroup, Oid)>)> {
     if groups.is_empty() {
         return Err(CoreError::Refused(
@@ -154,7 +208,7 @@ pub fn sequencer_rebase(
         ("GIT_SEQUENCE_EDITOR", format!("cp '{}'", posix(&todo_src))),
         ("GIT_EDITOR", "true".to_string()),
     ];
-    let rebase = run_git(
+    let rebase = run_git_cancellable(
         &wt,
         &[
             "-c",
@@ -168,14 +222,18 @@ pub fn sequencer_rebase(
             &base.to_string(),
         ],
         &envs,
+        cancel,
     );
 
     if let Err(e) = rebase {
         let _ = run_git(&wt, &["rebase", "--abort"], &[]);
         cleanup(&repo_dir, &wt, &scratch);
-        return Err(CoreError::Refused(format!(
-            "le rejeu de la structure a échoué (conflit probable) : {e}"
-        )));
+        return Err(match e {
+            CoreError::Cancelled => CoreError::Cancelled,
+            e => CoreError::Refused(format!(
+                "le rejeu de la structure a échoué (conflit probable) : {e}"
+            )),
+        });
     }
 
     let head = run_git(&wt, &["rev-parse", "HEAD"], &[])?;

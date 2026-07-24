@@ -29,6 +29,10 @@ pub enum CoreError {
     /// cible). `expected` est la valeur attendue, à afficher par l'UI.
     #[error("confirmation requise : {message}")]
     ConfirmRequired { expected: String, message: String },
+    /// Opération interrompue par l'utilisateur (annulation coopérative) :
+    /// aucun état incohérent, l'UI l'affiche en information, pas en erreur.
+    #[error("opération annulée par l'utilisateur")]
+    Cancelled,
 }
 
 impl CoreError {
@@ -47,6 +51,7 @@ impl CoreError {
             CoreError::RateLimited { .. } => "rate_limited",
             CoreError::ConsentRequired(_) => "consent_required",
             CoreError::ConfirmRequired { .. } => "confirm_required",
+            CoreError::Cancelled => "cancelled",
         }
     }
 

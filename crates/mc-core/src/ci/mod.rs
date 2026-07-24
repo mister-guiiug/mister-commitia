@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
 use crate::model::*;
+use crate::task::TaskCtx;
 
 pub enum CiClient {
     Github(github::GithubCi),
@@ -32,9 +33,15 @@ impl CiClient {
     }
 
     pub async fn list_runs(&self, max: usize) -> Result<Vec<CiRun>> {
+        self.list_runs_with(max, &TaskCtx::noop("ci_inventory"))
+            .await
+    }
+
+    /// Inventaire paginé avec progression (une page = un point d'arrêt sûr).
+    pub async fn list_runs_with(&self, max: usize, ctx: &TaskCtx) -> Result<Vec<CiRun>> {
         match self {
-            CiClient::Github(c) => c.list_runs(max).await,
-            CiClient::AzDo(c) => c.list_runs(max).await,
+            CiClient::Github(c) => c.list_runs(max, ctx).await,
+            CiClient::AzDo(c) => c.list_runs(max, ctx).await,
         }
     }
 
