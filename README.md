@@ -45,4 +45,4 @@ La fonctionnalité de normalisation des messages — y compris la détection des
 
 ## Licence
 
-À définir par le propriétaire du dépôt (aucune licence appliquée à ce stade : tous droits réservés par défaut).
+Distribué sous licence [MIT](LICENSE).
