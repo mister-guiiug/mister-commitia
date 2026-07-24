@@ -115,6 +115,14 @@ const mock = {
     { seq: 1, ts: "2026-07-24T09:00:00Z", actor: "demo", category: "config", action: "repo_declare", target: "webapp-checkout", params: {}, result: "ok" },
   ] as AuditEvent[],
   simulated: false,
+  skillsYaml: {
+    "conventional-commits": "apiVersion: mister-commitia/skill.v1\nname: conventional-commits\nversion: 1.2.0\nowner: platform-team@example.org\nstatus: published\ndescription: >\n  Reformule un message selon Conventional Commits 1.0.0.\n",
+    "commit-synthesis": "apiVersion: mister-commitia/skill.v1\nname: commit-synthesis\nversion: 1.0.0\nowner: platform-team@example.org\nstatus: published\ndescription: Synthèse de groupe.\n",
+    "ai-signature-cleaner": "apiVersion: mister-commitia/skill.v1\nname: ai-signature-cleaner\nversion: 1.0.0\nowner: platform-team@example.org\nstatus: published\ndescription: Normalisation gouvernée.\n",
+    "squash-advisor": "apiVersion: mister-commitia/skill.v1\nname: squash-advisor\nversion: 1.0.0\nowner: platform-team@example.org\nstatus: published\ndescription: Groupes fusionnables.\n",
+    "ci-cleanup-policy": "apiVersion: mister-commitia/skill.v1\nname: ci-cleanup-policy\nversion: 1.0.0\nowner: platform-team@example.org\nstatus: published\ndescription: Politique de rétention.\n",
+    "risk-reviewer": "apiVersion: mister-commitia/skill.v1\nname: risk-reviewer\nversion: 1.0.0\nowner: platform-team@example.org\nstatus: published\ndescription: Risques d'un plan.\n",
+  } as Record<string, string>,
 };
 
 let seq = 1;
@@ -187,6 +195,22 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
       { name: "ci-cleanup-policy", version: "1.0.0", owner: "platform-team@example.org", status: "published", description: "Propose une politique de rétention.", output: "report", guardrails: ["report_only"], rules: ["Protéger par défaut"], tests: 1, local_capable: false },
       { name: "risk-reviewer", version: "1.0.0", owner: "platform-team@example.org", status: "published", description: "Évalue les risques d'un plan.", output: "report", guardrails: ["report_only", "can_block"], rules: ["Axes d'analyse"], tests: 2, local_capable: false },
     ] as SkillMeta[], []];
+    case "commit_diff": {
+      const c = demoCommits.find((x) => x.sha === args.sha);
+      return `diff --git a/src/pay.rs b/src/pay.rs\nindex 0000001..0000002 100644\n--- a/src/pay.rs\n+++ b/src/pay.rs\n@@ -1,3 +1,6 @@\n pub fn pay() {\n-    // ancien comportement\n+    // ${c?.subject ?? "changement"}\n+    validate_cart();\n+    charge_customer();\n }\n`;
+    }
+    case "skill_read":
+      return mock.skillsYaml[String(args.name)] ?? (() => { throw { code: "not_found", message: `introuvable : skill ${args.name}` } satisfies IpcError; })();
+    case "skill_write": {
+      const name = String(args.name);
+      const content = String(args.content);
+      if (!mock.skillsYaml[name]) throw { code: "not_found", message: `introuvable : skill ${name}` } satisfies IpcError;
+      if (content.includes("::")) throw { code: "invalid", message: "invalide : YAML invalide" } satisfies IpcError;
+      if (!content.includes(`name: ${name}`)) throw { code: "invalid", message: `invalide : le champ name doit rester « ${name} »` } satisfies IpcError;
+      mock.skillsYaml[name] = content;
+      audit("skill", "edit", name);
+      return null;
+    }
     case "skill_run_tests": return [
       { case: "conserve-le-ticket", passed: true, detail: "ok" },
       { case: "trailer-signed-off-intact", passed: true, detail: "ok" },

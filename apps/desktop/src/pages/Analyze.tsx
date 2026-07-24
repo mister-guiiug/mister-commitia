@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, Download, FlaskConical, GitBranch, Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload, XCircle,
+  CheckCircle2, Download, FileText, FlaskConical, GitBranch, Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload, XCircle,
 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import type {
@@ -33,9 +33,12 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   const [drops, setDrops] = useState<Set<string>>(new Set());
   const [consent, setConsent] = useState<{ preview: string; groups: string[][] } | null>(null);
   const [confirmReq, setConfirmReq] = useState<{ expected: string; message: string } | null>(null);
+  const [diffView, setDiffView] = useState<{ sha: string; subject: string; patch: string } | null>(null);
+  const [order, setOrder] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
+  const dragSha = useRef<string | null>(null);
 
   const doScan = async (b?: string) => {
     setError(null);
@@ -45,6 +48,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       setScan(res);
       setBranch(res.branch);
       setSelection(new Set());
+      setOrder(res.commits.map((c) => c.sha));
       setProposals(await call<Proposal[]>("proposals_list", { repoId: repo.id }));
     } catch (e) {
       setError(asIpcError(e).message);
@@ -66,6 +70,43 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   }, [scan]);
 
   const flagsFor = (sha: string) => scan?.report.flags.filter((f) => f.sha === sha) ?? [];
+
+  // Ordre d'affichage = ordre du futur plan (F2). Dérivé de `order`.
+  const displayCommits: CommitInfo[] = order
+    .map((sha) => commitsBySha.get(sha))
+    .filter((c): c is CommitInfo => Boolean(c));
+  const reordered = scan ? order.join() !== scan.commits.map((c) => c.sha).join() : false;
+
+  const moveInOrder = (sha: string, delta: number) =>
+    setOrder((o) => {
+      const i = o.indexOf(sha);
+      const j = i + delta;
+      if (i < 0 || j < 0 || j >= o.length) return o;
+      const n = [...o];
+      [n[i], n[j]] = [n[j], n[i]];
+      return n;
+    });
+
+  const dropOn = (targetSha: string) => {
+    const from = dragSha.current;
+    dragSha.current = null;
+    if (!from || from === targetSha) return;
+    setOrder((o) => {
+      const n = o.filter((s) => s !== from);
+      n.splice(n.indexOf(targetSha), 0, from);
+      return n;
+    });
+  };
+
+  const showDiff = async (c: CommitInfo) => {
+    setError(null);
+    try {
+      const patch = await call<string>("commit_diff", { repoId: repo.id, sha: c.sha });
+      setDiffView({ sha: c.short, subject: c.subject, patch });
+    } catch (e) {
+      setError(asIpcError(e).message);
+    }
+  };
 
   const toggle = (sha: string) =>
     setSelection((s) => {
@@ -143,6 +184,18 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       let seq = 1;
       const ops: PlanOp[] = [];
       const inSegment = new Set(scan!.commits.map((c) => c.sha));
+      // F2 : le réordonnancement visuel devient une opération du plan.
+      if (reordered) {
+        ops.push({
+          op: "reorder",
+          order: order.filter((sha) => !drops.has(sha)),
+          seq: seq++,
+          origin: "manuel",
+          risk: "medium",
+          approved_by: "utilisateur",
+          approved_at: new Date().toISOString(),
+        });
+      }
       for (const prop of proposals) {
         if ((prop.status !== "accepted" && prop.status !== "edited") || !prop.decision) continue;
         if (!prop.targets.every((t) => inSegment.has(t))) continue;
@@ -245,6 +298,46 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     toast("success", "Plan exporté (JSON reproductible)");
   };
 
+  // F9 : rapport HTML autonome (revue d'équipe hors outil).
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const exportHtmlReport = () => {
+    if (!plan || !scan) return;
+    const opRows = plan.ops
+      .map((o) => {
+        const cible = "target" in o ? o.target.slice(0, 8) : "targets" in o ? o.targets.map((t) => t.slice(0, 8)).join(" + ") : "order" in o ? o.order.map((t) => t.slice(0, 8)).join(" → ") : "";
+        const detail = "new_message" in o ? o.new_message.split("\n")[0] : "reason" in o ? o.reason : "";
+        return `<tr><td>${o.seq}</td><td>${o.op}</td><td><code>${esc(cible)}</code></td><td>${esc(detail)}</td><td>${o.risk}</td></tr>`;
+      })
+      .join("");
+    const riskRows = risks
+      .map((r) => `<li><b class="${r.verdict}">${esc(r.axe)} : ${r.verdict}</b> — ${esc(r.motif)}</li>`)
+      .join("");
+    const mapRows = plan.mapping
+      .map((m) => {
+        const subjects = m.old.map((o) => commitsBySha.get(o)?.subject ?? "").filter(Boolean).join(" + ");
+        return `<tr><td><code>${m.old.map((o) => o.slice(0, 8)).join("+")}</code></td><td><code>${m.new.slice(0, 8)}</code></td><td>${esc(subjects)}</td></tr>`;
+      })
+      .join("");
+    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Plan ${plan.id} — ${esc(repo.name)}</title>
+<style>body{font-family:system-ui;margin:2rem auto;max-width:60rem;color:#1e293b}table{border-collapse:collapse;width:100%;margin:.5rem 0}td,th{border:1px solid #cbd5e1;padding:.3rem .5rem;text-align:left;font-size:.9rem}code{font-family:ui-monospace,monospace;background:#f1f5f9;padding:0 .2rem}.ok{color:#0f766e}.attention{color:#b45309}.bloquant{color:#be123c}h1{font-size:1.3rem}h2{font-size:1rem;margin-top:1.5rem}footer{margin-top:2rem;font-size:.8rem;color:#64748b}</style></head><body>
+<h1>Plan de réécriture — ${esc(repo.name)} · ${esc(plan.fingerprint.branch)}</h1>
+<p>Statut : <b>${plan.status}</b> · généré le ${new Date().toLocaleString("fr-FR")} · plan <code>${plan.id}</code></p>
+<h2>Opérations (${plan.ops.length})</h2><table><tr><th>#</th><th>Opération</th><th>Cible(s)</th><th>Détail</th><th>Risque</th></tr>${opRows}</table>
+<h2>Risques</h2><ul>${riskRows}</ul>
+${plan.mapping.length > 0 ? `<h2>Avant / après (dry-run réel — ${esc(plan.preview_ref ?? "")})</h2><table><tr><th>Anciens SHA</th><th>Nouveau</th><th>Sujets</th></tr>${mapRows}</table>` : ""}
+${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <code>${esc(plan.backup_tag ?? "")}</code></p>` : ""}
+<footer>Généré par mister-commitia — garde-fous : dry-run obligatoire, backup automatique, branches protégées bloquées, journal d'audit local.</footer>
+</body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `rapport-${plan.id}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast("success", "Rapport HTML exporté");
+  };
+
   const importPlan = async (file: File) => {
     setError(null);
     try {
@@ -311,7 +404,19 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       <ErrorBox error={error} />
 
       <Card
-        title="Commits du segment réécrivable (du plus ancien au plus récent)"
+        title={
+          <span className="flex items-center gap-2">
+            Commits du segment réécrivable (du plus ancien au plus récent)
+            {reordered && (
+              <>
+                <Badge tone="amber">ordre modifié → op reorder au plan</Badge>
+                <Button kind="ghost" onClick={() => setOrder(scan.commits.map((c) => c.sha))}>
+                  rétablir l'ordre
+                </Button>
+              </>
+            )}
+          </span>
+        }
         actions={
           <>
             <select
@@ -354,8 +459,17 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/70">
-            {scan.commits.map((c) => (
-              <tr key={c.sha} className={`${trCls} ${selection.has(c.sha) ? "bg-teal-950/30" : ""}`}>
+            {displayCommits.map((c, idx) => (
+              <tr
+                key={c.sha}
+                draggable
+                onDragStart={() => {
+                  dragSha.current = c.sha;
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => dropOn(c.sha)}
+                className={`${trCls} ${selection.has(c.sha) ? "bg-teal-950/30" : ""} cursor-grab`}
+              >
                 <td className="py-1.5">
                   <input
                     type="checkbox"
@@ -364,7 +478,16 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
                     onChange={() => toggle(c.sha)}
                   />
                 </td>
-                <td className={"py-1.5 pr-3 " + shaCls}>{c.short}</td>
+                <td className="py-1.5 pr-3">
+                  <button
+                    type="button"
+                    className={shaCls + " underline decoration-slate-700 underline-offset-2 hover:text-teal-300"}
+                    title="Voir le diff de ce commit"
+                    onClick={() => void showDiff(c)}
+                  >
+                    {c.short}
+                  </button>
+                </td>
                 <td className="py-1.5 pr-3">
                   <div className={`${drops.has(c.sha) ? "line-through opacity-50" : ""} truncate text-slate-100`} title={c.subject}>
                     {c.subject}
@@ -392,19 +515,39 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
                   </div>
                 </td>
                 <td className="py-1.5 text-right">
-                  <Button
-                    kind="ghost"
-                    onClick={() =>
-                      setDrops((d) => {
-                        const n = new Set(d);
-                        if (n.has(c.sha)) n.delete(c.sha);
-                        else n.add(c.sha);
-                        return n;
-                      })
-                    }
-                  >
-                    {drops.has(c.sha) ? "garder" : "abandonner"}
-                  </Button>
+                  <span className="inline-flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      aria-label={`Monter ${c.short}`}
+                      disabled={idx === 0}
+                      onClick={() => moveInOrder(c.sha, -1)}
+                      className="rounded px-1 text-slate-500 hover:text-slate-200 disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Descendre ${c.short}`}
+                      disabled={idx === displayCommits.length - 1}
+                      onClick={() => moveInOrder(c.sha, 1)}
+                      className="rounded px-1 text-slate-500 hover:text-slate-200 disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                    <Button
+                      kind="ghost"
+                      onClick={() =>
+                        setDrops((d) => {
+                          const n = new Set(d);
+                          if (n.has(c.sha)) n.delete(c.sha);
+                          else n.add(c.sha);
+                          return n;
+                        })
+                      }
+                    >
+                      {drops.has(c.sha) ? "garder" : "abandonner"}
+                    </Button>
+                  </span>
                 </td>
               </tr>
             ))}
@@ -510,8 +653,13 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
                 </Button>
               )}
               {plan && (
-                <Button kind="ghost" onClick={exportPlan} title="Exporter le plan reproductible">
+                <Button kind="ghost" onClick={exportPlan} title="Exporter le plan reproductible (JSON)">
                   <Download size={ICON_SM} />
+                </Button>
+              )}
+              {plan && (
+                <Button kind="ghost" onClick={exportHtmlReport} title="Exporter le rapport HTML (revue d'équipe)">
+                  <FileText size={ICON_SM} />
                 </Button>
               )}
               <Button kind="ghost" onClick={() => importRef.current?.click()} title="Importer un plan (JSON)">
@@ -627,6 +775,31 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
           </p>
           <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap rounded bg-slate-950 p-3 text-xs text-slate-300">
             {consent.preview}
+          </pre>
+        </Modal>
+      )}
+
+      {diffView && (
+        <Modal
+          title={`Diff — ${diffView.sha} · ${diffView.subject}`}
+          width={760}
+          onClose={() => setDiffView(null)}
+          footer={<Button onClick={() => setDiffView(null)} autoFocus>Fermer</Button>}
+        >
+          <pre className="max-h-[60vh] overflow-auto rounded bg-slate-950 p-3 text-xs leading-relaxed">
+            {diffView.patch.split("\n").map((line, i) => (
+              <div
+                key={i}
+                className={
+                  line.startsWith("+") && !line.startsWith("+++") ? "text-teal-300"
+                  : line.startsWith("-") && !line.startsWith("---") ? "text-rose-300"
+                  : line.startsWith("@@") ? "text-sky-400"
+                  : "text-slate-400"
+                }
+              >
+                {line || " "}
+              </div>
+            ))}
           </pre>
         </Modal>
       )}

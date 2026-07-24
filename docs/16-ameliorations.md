@@ -74,3 +74,16 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > U11 (partiel : espaces insécables et libellés principaux), F5 (import de plan dans l'UI).
 > Vérifié : 31 tests cœur verts, parcours navigateur (confirmation renforcée, consentement,
 > toasts) rejoués.
+
+> **Lot 2 livré le 2026-07-24** : F2 (réordonnancement drag & drop **et** boutons clavier
+> accessibles → op `reorder` du plan), F3 (`commit_diff` + visionneuse colorée), F8 (éditeur
+> YAML des skills — validation à l'enregistrement, `name` immuable, éditions journalisées),
+> F9 (rapport HTML autonome du plan), F10 (onboarding premier lancement), U6 (en-tête
+> contextuel global + pages montées en permanence = état conservé entre onglets), U9
+> (focus-visible, `prefers-reduced-motion`, aria-labels/aria-current), T4 (tracing avec
+> writer fichier **redacté**, niveau via `MC_LOG`), T2 **partiel** (scan/dry-run/apply/rollback
+> en `spawn_blocking` : UI réactive — progression + annulation reportées).
+> **Reportés au lot suivant** : T11 (streaming IA, retry/backoff) + progression/annulation
+> des opérations longues (un même chantier événementiel).
+> Vérifié : 35 tests cœur verts (dont reorder et éditeur), parcours navigateur rejoués
+> (onboarding, diff, réordonnancement, édition de skill persistée + auditée).
