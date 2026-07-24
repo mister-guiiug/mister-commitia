@@ -50,6 +50,17 @@ fn ca2_analyze_flags_without_side_effects() {
     assert!(f.repo.find_reference("refs/mc/preview").is_err());
 }
 
+/// F3 : le diff d'un commit est un patch unifié exploitable.
+#[test]
+fn commit_diff_returns_unified_patch() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let patch = core.commit_diff(&repo_id, &shas[0].to_string()).unwrap();
+    assert!(patch.contains("diff --git"), "{patch}");
+    assert!(patch.contains("src/pay.rs"));
+    assert!(patch.contains("+pub fn pay()"));
+}
+
 #[test]
 fn commit_infos_carry_files_signatures_and_trailers() {
     let (f, shas) = feature_fixture();

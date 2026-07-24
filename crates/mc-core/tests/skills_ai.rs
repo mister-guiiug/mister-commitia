@@ -226,6 +226,59 @@ async fn synthesis_preserves_refs_and_breaking() {
     assert!(after.lines().next().unwrap().starts_with("feat"));
 }
 
+fn temp_skills() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().join("essai");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(
+        d.join("skill.yaml"),
+        "apiVersion: mister-commitia/skill.v1\nname: essai\nversion: 1.0.0\nowner: t@example.org\nstatus: draft\ndescription: test\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// F8 : lecture/écriture d'une skill — validation YAML, nom immuable, audit.
+#[test]
+fn skill_editor_roundtrip_validates() {
+    std::env::set_var("MC_SECRETS_MODE", "memory");
+    let skills = temp_skills();
+    let core = mc_core::Core::in_memory(skills.path().to_path_buf()).unwrap();
+
+    let content = core.skill_read("essai").unwrap();
+    assert!(content.contains("name: essai"));
+
+    let err = core
+        .skill_write("essai", "::pas du yaml::")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("YAML"), "{err}");
+
+    let err = core
+        .skill_write("essai", &content.replace("name: essai", "name: autre"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("name"), "{err}");
+
+    let edited = content.replace("version: 1.0.0", "version: 1.1.0");
+    core.skill_write("essai", &edited).unwrap();
+    assert!(core.skill_read("essai").unwrap().contains("version: 1.1.0"));
+    let audit = core.audit_list(10).unwrap();
+    assert!(audit
+        .iter()
+        .any(|e| e.action == "edit" && e.target == "essai"));
+}
+
+/// F8 : une skill inconnue ne peut pas servir de vecteur de traversée.
+#[test]
+fn skill_editor_rejects_unknown_names() {
+    std::env::set_var("MC_SECRETS_MODE", "memory");
+    let skills = temp_skills();
+    let core = mc_core::Core::in_memory(skills.path().to_path_buf()).unwrap();
+    assert!(core.skill_read("../evil").is_err());
+    assert!(core.skill_write("../evil", "name: x").is_err());
+}
+
 /// Le runner de self-tests des skills passe en mode déterministe local.
 #[test]
 fn skill_selftests_pass_for_local_capable_skills() {

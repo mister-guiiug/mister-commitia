@@ -213,6 +213,41 @@ impl GitEngine {
             .collect()
     }
 
+    /// Patch unifié d'un commit (vs son premier parent), tronqué à `max_bytes`.
+    pub fn commit_patch(repo: &Repository, oid: Oid, max_bytes: usize) -> Result<String> {
+        let c = repo.find_commit(oid)?;
+        let tree = c.tree()?;
+        let parent_tree = if c.parent_count() > 0 {
+            Some(c.parent(0)?.tree()?)
+        } else {
+            None
+        };
+        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+        let mut out = String::new();
+        let mut truncated = false;
+        let print_result = diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
+            if out.len() >= max_bytes {
+                truncated = true;
+                return false; // interrompt l'itération (erreur EUSER attendue)
+            }
+            match line.origin() {
+                '+' | '-' | ' ' => out.push(line.origin()),
+                _ => {}
+            }
+            out.push_str(&String::from_utf8_lossy(line.content()));
+            true
+        });
+        if let Err(e) = print_result {
+            if !truncated {
+                return Err(e.into());
+            }
+        }
+        if truncated {
+            out.push_str("\n… [diff tronqué : commit volumineux]\n");
+        }
+        Ok(out)
+    }
+
     /// Aucun fichier suivi modifié (les fichiers non suivis sont tolérés :
     /// un `reset --hard` ne les touche pas).
     pub fn workdir_clean(repo: &Repository) -> Result<bool> {

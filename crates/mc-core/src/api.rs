@@ -87,6 +87,15 @@ impl Core {
         let redacted: serde_json::Value =
             serde_json::from_str(&secrets::redact(&params.to_string()))
                 .unwrap_or(serde_json::Value::Null);
+        // Journal structuré (T4) — le writer du souscripteur redacte aussi.
+        tracing::info!(
+            target: "mc::audit",
+            category,
+            action,
+            cible = target,
+            resultat = %secrets::redact(result),
+            "audit"
+        );
         let _ = self.store.audit_append(
             &self.actor,
             category,
@@ -203,6 +212,15 @@ impl Core {
             report,
             squash_suggestions,
         })
+    }
+
+    /// Patch unifié d'un commit (visionneuse de diff, F3).
+    pub fn commit_diff(&self, repo_id: &str, sha: &str) -> Result<String> {
+        let r = self.store.repo_get(repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let oid =
+            git2::Oid::from_str(sha).map_err(|e| CoreError::Invalid(format!("sha {sha} : {e}")))?;
+        GitEngine::commit_patch(&repo, oid, 200_000)
     }
 
     // -- E3 : plans ----------------------------------------------------------
@@ -618,6 +636,36 @@ impl Core {
             "ok",
         );
         Ok(p)
+    }
+
+    /// Contenu YAML d'une skill (éditeur intégré, F8). Le chemin est résolu
+    /// depuis le registre chargé — jamais depuis un chemin fourni par l'UI.
+    pub fn skill_read(&self, name: &str) -> Result<String> {
+        let skill = self.skill_by_name(name)?;
+        Ok(std::fs::read_to_string(skill.dir.join("skill.yaml"))?)
+    }
+
+    /// Écrit une skill existante après validation : YAML parsable, `name`
+    /// inchangé. Toute édition est journalisée.
+    pub fn skill_write(&self, name: &str, content: &str) -> Result<()> {
+        let skill = self.skill_by_name(name)?;
+        let def: crate::skills::SkillDef = serde_yaml::from_str(content)
+            .map_err(|e| CoreError::Invalid(format!("YAML invalide : {e}")))?;
+        if def.name != name {
+            return Err(CoreError::Invalid(format!(
+                "le champ name (« {} ») doit rester « {name} » — renommer = créer une nouvelle skill",
+                def.name
+            )));
+        }
+        std::fs::write(skill.dir.join("skill.yaml"), content)?;
+        self.audit(
+            "skill",
+            "edit",
+            name,
+            json!({"version": def.version, "status": def.status}),
+            "ok",
+        );
+        Ok(())
     }
 
     /// Runner de tests de skills en mode déterministe (assistant local).

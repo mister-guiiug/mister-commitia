@@ -2,10 +2,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use mc_core::model::*;
 use mc_core::Core;
 use tauri::Manager;
+
+/// Le cœur est partagé en Arc pour permettre aux commandes lourdes de
+/// s'exécuter hors des workers IPC (spawn_blocking) sans geler l'UI.
+type ArcCore = Arc<Core>;
 
 /// Contrat d'erreur UI ↔ cœur : `code` est stable (l'UI s'y branche),
 /// `message` est le libellé humain, `expected` porte la valeur attendue
@@ -32,37 +37,53 @@ fn err(e: mc_core::CoreError) -> CmdError {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn repos_list(core: tauri::State<'_, Core>) -> CmdResult<Vec<RepoRef>> {
+fn repos_list(core: tauri::State<'_, ArcCore>) -> CmdResult<Vec<RepoRef>> {
     core.repo_list().map_err(err)
 }
 
 #[tauri::command]
-fn repo_declare(core: tauri::State<'_, Core>, path: String) -> CmdResult<RepoRef> {
+fn repo_declare(core: tauri::State<'_, ArcCore>, path: String) -> CmdResult<RepoRef> {
     core.repo_declare(&path).map_err(err)
 }
 
 #[tauri::command]
-fn repo_remove(core: tauri::State<'_, Core>, id: String) -> CmdResult<()> {
+fn repo_remove(core: tauri::State<'_, ArcCore>, id: String) -> CmdResult<()> {
     core.repo_remove(&id).map_err(err)
 }
 
 #[tauri::command]
-fn repo_branches(core: tauri::State<'_, Core>, id: String) -> CmdResult<Vec<BranchInfo>> {
+fn repo_branches(core: tauri::State<'_, ArcCore>, id: String) -> CmdResult<Vec<BranchInfo>> {
     core.repo_branches(&id).map_err(err)
 }
 
+fn join_err(e: tauri::Error) -> CmdError {
+    CmdError {
+        code: "internal",
+        message: format!("tâche interrompue : {e}"),
+        expected: None,
+    }
+}
+
 #[tauri::command]
-fn repo_scan(
-    core: tauri::State<'_, Core>,
+async fn repo_scan(
+    core: tauri::State<'_, ArcCore>,
     id: String,
     branch: Option<String>,
 ) -> CmdResult<mc_core::api::ScanResult> {
-    core.repo_scan(&id, branch).map_err(err)
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.repo_scan(&id, branch).map_err(err))
+        .await
+        .map_err(join_err)?
+}
+
+#[tauri::command]
+fn commit_diff(core: tauri::State<'_, ArcCore>, repo_id: String, sha: String) -> CmdResult<String> {
+    core.commit_diff(&repo_id, &sha).map_err(err)
 }
 
 #[tauri::command]
 fn repo_set_governance(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     id: String,
     governance: Governance,
     protected_branches: Vec<String>,
@@ -76,13 +97,13 @@ fn repo_set_governance(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn plan_new(core: tauri::State<'_, Core>, repo_id: String, branch: String) -> CmdResult<Plan> {
+fn plan_new(core: tauri::State<'_, ArcCore>, repo_id: String, branch: String) -> CmdResult<Plan> {
     core.plan_new(&repo_id, &branch).map_err(err)
 }
 
 #[tauri::command]
 fn plan_set_ops(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     plan_id: String,
     ops: Vec<PlanOp>,
 ) -> CmdResult<Plan> {
@@ -90,44 +111,53 @@ fn plan_set_ops(
 }
 
 #[tauri::command]
-fn plan_dry_run(core: tauri::State<'_, Core>, plan_id: String) -> CmdResult<Plan> {
-    core.plan_dry_run(&plan_id).map_err(err)
+async fn plan_dry_run(core: tauri::State<'_, ArcCore>, plan_id: String) -> CmdResult<Plan> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.plan_dry_run(&plan_id).map_err(err))
+        .await
+        .map_err(join_err)?
 }
 
 #[tauri::command]
-fn plan_apply(
-    core: tauri::State<'_, Core>,
+async fn plan_apply(
+    core: tauri::State<'_, ArcCore>,
     plan_id: String,
     confirm: Option<String>,
 ) -> CmdResult<Plan> {
-    core.plan_apply(&plan_id, confirm).map_err(err)
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.plan_apply(&plan_id, confirm).map_err(err))
+        .await
+        .map_err(join_err)?
 }
 
 #[tauri::command]
-fn plan_rollback(core: tauri::State<'_, Core>, plan_id: String) -> CmdResult<Plan> {
-    core.plan_rollback(&plan_id).map_err(err)
+async fn plan_rollback(core: tauri::State<'_, ArcCore>, plan_id: String) -> CmdResult<Plan> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.plan_rollback(&plan_id).map_err(err))
+        .await
+        .map_err(join_err)?
 }
 
 #[tauri::command]
-fn plan_list(core: tauri::State<'_, Core>, repo_id: String) -> CmdResult<Vec<Plan>> {
+fn plan_list(core: tauri::State<'_, ArcCore>, repo_id: String) -> CmdResult<Vec<Plan>> {
     core.plan_list(&repo_id).map_err(err)
 }
 
 #[tauri::command]
 fn plan_risk(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     plan_id: String,
 ) -> CmdResult<Vec<mc_core::plan::RiskAxis>> {
     core.plan_risk(&plan_id).map_err(err)
 }
 
 #[tauri::command]
-fn plan_export(core: tauri::State<'_, Core>, plan_id: String) -> CmdResult<String> {
+fn plan_export(core: tauri::State<'_, ArcCore>, plan_id: String) -> CmdResult<String> {
     core.plan_export(&plan_id).map_err(err)
 }
 
 #[tauri::command]
-fn plan_import(core: tauri::State<'_, Core>, repo_id: String, json: String) -> CmdResult<Plan> {
+fn plan_import(core: tauri::State<'_, ArcCore>, repo_id: String, json: String) -> CmdResult<Plan> {
     core.plan_import(&repo_id, &json).map_err(err)
 }
 
@@ -137,14 +167,24 @@ fn plan_import(core: tauri::State<'_, Core>, repo_id: String, json: String) -> C
 
 #[tauri::command]
 fn skills_list(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
 ) -> CmdResult<(Vec<mc_core::api::SkillMeta>, Vec<(String, String)>)> {
     core.skills_list().map_err(err)
 }
 
 #[tauri::command]
+fn skill_read(core: tauri::State<'_, ArcCore>, name: String) -> CmdResult<String> {
+    core.skill_read(&name).map_err(err)
+}
+
+#[tauri::command]
+fn skill_write(core: tauri::State<'_, ArcCore>, name: String, content: String) -> CmdResult<()> {
+    core.skill_write(&name, &content).map_err(err)
+}
+
+#[tauri::command]
 fn skill_run_tests(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     name: String,
 ) -> CmdResult<Vec<mc_core::api::SkillTestResult>> {
     core.skill_run_tests(&name).map_err(err)
@@ -152,7 +192,7 @@ fn skill_run_tests(
 
 #[tauri::command]
 fn ai_preview(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     repo_id: String,
     skill: String,
     shas: Vec<String>,
@@ -162,7 +202,7 @@ fn ai_preview(
 
 #[tauri::command]
 async fn proposals_generate(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     repo_id: String,
     skill: String,
     groups: Vec<Vec<String>>,
@@ -175,13 +215,13 @@ async fn proposals_generate(
 }
 
 #[tauri::command]
-fn proposals_list(core: tauri::State<'_, Core>, repo_id: String) -> CmdResult<Vec<Proposal>> {
+fn proposals_list(core: tauri::State<'_, ArcCore>, repo_id: String) -> CmdResult<Vec<Proposal>> {
     core.proposals_list(&repo_id).map_err(err)
 }
 
 #[tauri::command]
 fn proposal_decide(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     proposal_id: String,
     decision: String,
     edited_message: Option<String>,
@@ -196,7 +236,7 @@ fn proposal_decide(
 
 #[tauri::command]
 fn ai_provider_save(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     kind: AiProviderKind,
     base_url: Option<String>,
     model: Option<String>,
@@ -208,17 +248,20 @@ fn ai_provider_save(
 }
 
 #[tauri::command]
-fn ai_provider_list(core: tauri::State<'_, Core>) -> CmdResult<Vec<AiProviderConfig>> {
+fn ai_provider_list(core: tauri::State<'_, ArcCore>) -> CmdResult<Vec<AiProviderConfig>> {
     core.ai_provider_list().map_err(err)
 }
 
 #[tauri::command]
-fn ai_provider_remove(core: tauri::State<'_, Core>, id: String) -> CmdResult<()> {
+fn ai_provider_remove(core: tauri::State<'_, ArcCore>, id: String) -> CmdResult<()> {
     core.ai_provider_remove(&id).map_err(err)
 }
 
 #[tauri::command]
-fn required_scopes(core: tauri::State<'_, Core>, kind: CiKind) -> CmdResult<Vec<(String, String)>> {
+fn required_scopes(
+    core: tauri::State<'_, ArcCore>,
+    kind: CiKind,
+) -> CmdResult<Vec<(String, String)>> {
     Ok(core.required_scopes(kind))
 }
 
@@ -228,7 +271,7 @@ fn required_scopes(core: tauri::State<'_, Core>, kind: CiKind) -> CmdResult<Vec<
 
 #[tauri::command]
 async fn ci_account_add(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     kind: CiKind,
     base_url: String,
     org: Option<String>,
@@ -243,18 +286,18 @@ async fn ci_account_add(
 }
 
 #[tauri::command]
-fn ci_account_list(core: tauri::State<'_, Core>) -> CmdResult<Vec<CiAccount>> {
+fn ci_account_list(core: tauri::State<'_, ArcCore>) -> CmdResult<Vec<CiAccount>> {
     core.ci_account_list().map_err(err)
 }
 
 #[tauri::command]
-fn ci_account_remove(core: tauri::State<'_, Core>, id: String) -> CmdResult<()> {
+fn ci_account_remove(core: tauri::State<'_, ArcCore>, id: String) -> CmdResult<()> {
     core.ci_account_remove(&id).map_err(err)
 }
 
 #[tauri::command]
 async fn ci_inventory(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     account_id: String,
     max: usize,
 ) -> CmdResult<Vec<CiRun>> {
@@ -263,7 +306,7 @@ async fn ci_inventory(
 
 #[tauri::command]
 fn policy_save(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     name: String,
     rules: RetentionRules,
 ) -> CmdResult<RetentionPolicy> {
@@ -271,13 +314,13 @@ fn policy_save(
 }
 
 #[tauri::command]
-fn policy_list(core: tauri::State<'_, Core>) -> CmdResult<Vec<RetentionPolicy>> {
+fn policy_list(core: tauri::State<'_, ArcCore>) -> CmdResult<Vec<RetentionPolicy>> {
     core.policy_list().map_err(err)
 }
 
 #[tauri::command]
 async fn ci_simulate(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     account_id: String,
     policy_id: String,
     max: usize,
@@ -289,7 +332,7 @@ async fn ci_simulate(
 
 #[tauri::command]
 async fn ci_delete_run(
-    core: tauri::State<'_, Core>,
+    core: tauri::State<'_, ArcCore>,
     account_id: String,
     policy_id: String,
     run: CiRun,
@@ -305,12 +348,12 @@ async fn ci_delete_run(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn audit_list(core: tauri::State<'_, Core>, limit: u32) -> CmdResult<Vec<AuditEvent>> {
+fn audit_list(core: tauri::State<'_, ArcCore>, limit: u32) -> CmdResult<Vec<AuditEvent>> {
     core.audit_list(limit).map_err(err)
 }
 
 #[tauri::command]
-fn audit_export(core: tauri::State<'_, Core>) -> CmdResult<String> {
+fn audit_export(core: tauri::State<'_, ArcCore>) -> CmdResult<String> {
     core.audit_export().map_err(err)
 }
 
@@ -332,6 +375,34 @@ fn resolve_skills_dir(app: &tauri::App) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../skills")
 }
 
+/// Writer du journal structuré : chaque ligne passe par la redaction des
+/// secrets AVANT d'atteindre le disque (T4).
+#[derive(Clone)]
+struct RedactingFile(PathBuf);
+
+impl std::io::Write for RedactingFile {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        use std::io::Write as _;
+        let line = mc_core::secrets::redact(&String::from_utf8_lossy(buf));
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.0)?;
+        f.write_all(line.as_bytes())?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RedactingFile {
+    type Writer = RedactingFile;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -345,11 +416,23 @@ fn main() {
                     .app_data_dir()
                     .expect("répertoire de données inaccessible"),
             };
+
+            // Journal structuré redacté (niveau via MC_LOG, défaut info).
+            let log_dir = data_dir.join("logs");
+            std::fs::create_dir_all(&log_dir).ok();
+            let filter = tracing_subscriber::EnvFilter::try_from_env("MC_LOG")
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_ansi(false)
+                .with_writer(RedactingFile(log_dir.join("mister-commitia.log")))
+                .try_init();
+
             let db_path = data_dir.join("mister-commitia.sqlite");
             let skills_dir = resolve_skills_dir(app);
             let core = Core::new(&db_path, skills_dir)
                 .map_err(|e| format!("initialisation du cœur : {e}"))?;
-            app.manage(core);
+            app.manage(Arc::new(core));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -359,6 +442,7 @@ fn main() {
             repo_branches,
             repo_scan,
             repo_set_governance,
+            commit_diff,
             plan_new,
             plan_set_ops,
             plan_dry_run,
@@ -369,6 +453,8 @@ fn main() {
             plan_export,
             plan_import,
             skills_list,
+            skill_read,
+            skill_write,
             skill_run_tests,
             ai_preview,
             proposals_generate,

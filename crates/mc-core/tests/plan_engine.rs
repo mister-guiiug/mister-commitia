@@ -368,6 +368,47 @@ fn squash_and_drop_full_pipeline() {
     assert!(f.dir.path().join("docs/pay.md").exists());
 }
 
+/// F2 : réordonnancement via le sequencer — l'ordre final suit l'op Reorder,
+/// l'arbre final reste identique (aucun drop).
+#[test]
+fn reorder_via_plan_changes_order_keeps_final_tree() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/checkout").unwrap();
+    // c4 (docs seul, fichiers indépendants) remonte en 2e position.
+    let order = vec![
+        shas[0].to_string(),
+        shas[3].to_string(),
+        shas[1].to_string(),
+        shas[2].to_string(),
+    ];
+    let plan = core
+        .plan_set_ops(&plan.id, vec![op(1, Operation::Reorder { order })])
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+
+    let old_order: Vec<String> = plan.mapping.iter().map(|m| m.old[0].clone()).collect();
+    assert_eq!(
+        old_order,
+        vec![
+            shas[0].to_string(),
+            shas[3].to_string(),
+            shas[1].to_string(),
+            shas[2].to_string()
+        ]
+    );
+    // Arbre final préservé (mêmes changements, autre ordre).
+    let preview = f
+        .repo
+        .refname_to_id(plan.preview_ref.as_ref().unwrap())
+        .unwrap();
+    let tip = f.repo.refname_to_id("refs/heads/feature/checkout").unwrap();
+    assert_eq!(
+        f.repo.find_commit(preview).unwrap().tree_id(),
+        f.repo.find_commit(tip).unwrap().tree_id()
+    );
+}
+
 /// Un plan appliqué est immuable.
 #[test]
 fn applied_plan_is_immutable() {
