@@ -13,4 +13,5 @@ target/
 dist/
 *.sqlite
 *.tsbuildinfo
+bundles/
 apps/desktop/src-tauri/gen/schemas/
