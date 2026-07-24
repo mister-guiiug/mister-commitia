@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { FolderPlus, Trash2, ArrowRight } from "lucide-react";
-import { call, pickDirectory } from "../ipc";
+import { ArrowRight, FolderPlus, Trash2 } from "lucide-react";
+import { asIpcError, call, pickDirectory } from "../ipc";
 import type { RepoRef } from "../types";
-import { Badge, Button, Card, Empty, ErrorBox } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, ICON_SM, Modal, useToast } from "../ui";
 
 export default function ReposPage({
   repos, selected, onSelect, onChanged,
@@ -12,8 +12,10 @@ export default function ReposPage({
   onSelect: (r: RepoRef) => void;
   onChanged: () => Promise<void>;
 }) {
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<RepoRef | null>(null);
 
   const add = async () => {
     setError(null);
@@ -21,22 +23,25 @@ export default function ReposPage({
     if (!path) return;
     setBusy(true);
     try {
-      await call<RepoRef>("repo_declare", { path });
+      const r = await call<RepoRef>("repo_declare", { path });
       await onChanged();
+      toast("success", `Dépôt « ${r.name} » déclaré — analyse locale disponible`);
     } catch (e) {
-      setError(String(e));
+      setError(asIpcError(e).message);
     } finally {
       setBusy(false);
     }
   };
 
   const remove = async (r: RepoRef) => {
-    if (!window.confirm(`Retirer « ${r.name} » du workspace ? (le dépôt Git n'est pas touché)`)) return;
+    setError(null);
     try {
       await call("repo_remove", { id: r.id });
+      setRemoving(null);
       await onChanged();
+      toast("info", `« ${r.name} » retiré du workspace (le dépôt Git est intact)`);
     } catch (e) {
-      setError(String(e));
+      setError(asIpcError(e).message);
     }
   };
 
@@ -45,14 +50,16 @@ export default function ReposPage({
       <Card
         title="Dépôts déclarés"
         actions={
-          <Button kind="primary" onClick={add} disabled={busy}>
-            <span className="flex items-center gap-1.5"><FolderPlus size={15} /> Déclarer un dépôt local</span>
+          <Button kind="primary" onClick={add} loading={busy}>
+            <FolderPlus size={ICON_SM} /> Déclarer un dépôt local
           </Button>
         }
       >
         <ErrorBox error={error} />
         {repos.length === 0 ? (
-          <Empty>Aucun dépôt. Déclarer un dépôt Git local pour commencer — l'analyse est 100 % locale (mode offline).</Empty>
+          <Empty actionLabel="Déclarer un dépôt local" onAction={add}>
+            Aucun dépôt. L'analyse est 100&nbsp;% locale (mode offline).
+          </Empty>
         ) : (
           <ul className="divide-y divide-slate-800">
             {repos.map((r) => (
@@ -67,22 +74,22 @@ export default function ReposPage({
                       <Badge tone="violet">normalisation autorisée</Badge>
                     )}
                   </div>
-                  <div className="truncate text-xs text-slate-500">
+                  <div className="truncate text-xs text-slate-500" title={r.local_path}>
                     {r.local_path}
                     {r.remote_url ? ` · ${r.remote_url}` : " · sans remote"}
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Branche par défaut : <code>{r.default_branch ?? "?"}</code> · protégées :{" "}
+                  <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
+                    Branche par défaut&nbsp;: <code>{r.default_branch ?? "?"}</code> · protégées&nbsp;:
                     {r.protected_branches.map((b) => (
                       <Badge key={b}>{b}</Badge>
                     ))}
                   </div>
                 </div>
                 <Button onClick={() => onSelect(r)}>
-                  <span className="flex items-center gap-1">Analyser <ArrowRight size={14} /></span>
+                  Analyser <ArrowRight size={ICON_SM} />
                 </Button>
-                <Button kind="danger" onClick={() => remove(r)} title="Retirer du workspace">
-                  <Trash2 size={14} />
+                <Button kind="danger" onClick={() => setRemoving(r)} title="Retirer du workspace">
+                  <Trash2 size={ICON_SM} />
                 </Button>
               </li>
             ))}
@@ -90,9 +97,31 @@ export default function ReposPage({
         )}
       </Card>
       <p className="text-xs text-slate-500">
-        Garde-fous actifs : branches protégées bloquées · dry-run obligatoire · backup automatique avant application ·
-        aucune action IA automatique · secrets au coffre du système.
+        Garde-fous actifs&nbsp;: branches protégées bloquées · dry-run obligatoire · backup automatique avant
+        application · aucune action IA automatique · secrets au coffre du système.
       </p>
+
+      {removing && (
+        <Modal
+          title={`Retirer « ${removing.name} » du workspace ?`}
+          onClose={() => setRemoving(null)}
+          footer={
+            <>
+              <Button onClick={() => setRemoving(null)} autoFocus>
+                Annuler
+              </Button>
+              <Button kind="danger" onClick={() => void remove(removing)}>
+                Retirer
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-slate-300">
+            Seules les métadonnées locales (analyses, plans, propositions) sont concernées&nbsp;: le dépôt Git
+            sur disque n'est pas touché.
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }

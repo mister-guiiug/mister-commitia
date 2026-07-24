@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { call } from "../ipc";
+import { asIpcError, call } from "../ipc";
 import type { AiProviderConfig, AiProviderKind, RepoRef } from "../types";
-import { Badge, Button, Card, Empty, ErrorBox, Field, inputCls } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, Field, inputCls, useToast } from "../ui";
 
 export default function SettingsPage({
   repos, onChanged,
@@ -9,6 +9,7 @@ export default function SettingsPage({
   repos: RepoRef[];
   onChanged: () => Promise<void>;
 }) {
+  const toast = useToast();
   const [providers, setProviders] = useState<AiProviderConfig[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,12 +50,16 @@ export default function SettingsPage({
       });
       setApiKey("");
       await refresh();
-    } catch (e) { setError(String(e)); }
+      toast("success", "Fournisseur IA enregistré comme défaut" + (apiKey ? " — clé envoyée au coffre" : ""));
+    } catch (e) { setError(asIpcError(e).message); }
   };
 
   const removeProvider = async (id: string) => {
-    try { await call("ai_provider_remove", { id }); await refresh(); }
-    catch (e) { setError(String(e)); }
+    try {
+      await call("ai_provider_remove", { id });
+      await refresh();
+      toast("info", "Fournisseur retiré (clé purgée du coffre)");
+    } catch (e) { setError(asIpcError(e).message); }
   };
 
   const saveGovernance = async () => {
@@ -72,7 +77,8 @@ export default function SettingsPage({
         protectedBranches: protectedBranches.split(",").map((s) => s.trim()).filter(Boolean),
       });
       await onChanged();
-    } catch (e) { setError(String(e)); }
+      toast("success", `Gouvernance de « ${r.name} » enregistrée`);
+    } catch (e) { setError(asIpcError(e).message); }
   };
 
   return (

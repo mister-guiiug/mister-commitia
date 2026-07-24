@@ -11,6 +11,23 @@ export const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 export const isMock = !isTauri;
 
+/// Contrat d'erreur du cœur (CmdError côté Rust) : `code` est stable,
+/// `message` est le libellé humain, `expected` porte la valeur attendue
+/// des confirmations renforcées. L'UI se branche sur `code`, jamais sur
+/// le texte du message.
+export interface IpcError {
+  code: string;
+  message: string;
+  expected?: string | null;
+}
+
+export function asIpcError(e: unknown): IpcError {
+  if (e && typeof e === "object" && "code" in e && "message" in e) {
+    return e as IpcError;
+  }
+  return { code: "unknown", message: String(e) };
+}
+
 export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri) {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -178,6 +195,16 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
     case "proposals_generate": {
       const groups = args.groups as string[][];
       const skill = String(args.skill);
+      const remoteDefault = mock.providers.find(
+        (p) => p.is_default && (p.kind === "open_ai_compat" || p.kind === "anthropic"),
+      );
+      if (remoteDefault && !args.consentRemote) {
+        throw {
+          code: "consent_required",
+          message:
+            "consentement requis : envoi à un fournisseur IA distant : accord explicite requis, aperçu des données à l'appui",
+        } satisfies IpcError;
+      }
       const out: Proposal[] = groups.map((g) => {
         const c = demoCommits.find((x) => x.sha === g[0]);
         const refused = skill === "ai-signature-cleaner" && (mock.repos[0].governance.ai_attribution_policy === "keep-required");
@@ -230,7 +257,20 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
     }
     case "plan_apply": {
       const p = mock.plans.find((x) => x.id === args.planId)!;
-      if (p.status !== "dry_run_ok") throw new Error("refusé : dry-run requis avant application");
+      if (p.status !== "dry_run_ok") {
+        throw {
+          code: "refused",
+          message: "refusé : dry-run requis avant application (aucun dry-run réussi pour ce plan)",
+        } satisfies IpcError;
+      }
+      // Le commit a1 de la démo est « partagé » → confirmation renforcée.
+      if (args.confirm !== p.fingerprint.branch) {
+        throw {
+          code: "confirm_required",
+          expected: p.fingerprint.branch,
+          message: `confirmation requise : branche partagée : saisir exactement « ${p.fingerprint.branch} » pour confirmer la réécriture`,
+        } satisfies IpcError;
+      }
       p.status = "applied"; p.applied_at = now();
       p.backup_ref = `refs/mc/backup/${p.fingerprint.branch}/20260724T100000Z`;
       p.backup_tag = `refs/tags/mc-backup-${p.id}`;
@@ -283,9 +323,20 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
       return report;
     }
     case "ci_delete_run": {
-      if (!mock.simulated) throw new Error("refusé : aucune simulation préalable pour ce périmètre");
+      if (!mock.simulated) {
+        throw {
+          code: "refused",
+          message: "refusé : aucune simulation préalable pour ce périmètre : exécuter la simulation d'abord",
+        } satisfies IpcError;
+      }
       const run = args.run as CiRun;
-      if (args.confirm !== run.pipeline_name) throw new Error(`refusé : saisir exactement « ${run.pipeline_name} »`);
+      if (args.confirm !== run.pipeline_name) {
+        throw {
+          code: "confirm_required",
+          expected: run.pipeline_name,
+          message: `confirmation requise : confirmation invalide : saisir exactement « ${run.pipeline_name} »`,
+        } satisfies IpcError;
+      }
       audit("ci_cleanup", "delete", `run ${run.run_id}`);
       return null;
     }
@@ -299,6 +350,6 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
     case "audit_list": return mock.audit;
     case "audit_export": return mock.audit.map((e) => JSON.stringify(e)).join("\n");
     default:
-      throw new Error(`commande mock inconnue : ${cmd}`);
+      throw { code: "invalid", message: `commande mock inconnue : ${cmd}` } satisfies IpcError;
   }
 }

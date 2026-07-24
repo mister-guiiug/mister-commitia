@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { PlayCircle } from "lucide-react";
-import { call } from "../ipc";
+import { asIpcError, call } from "../ipc";
 import type { SkillMeta, SkillTestResult } from "../types";
-import { Badge, Button, Card, Empty, ErrorBox } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, ICON_SM, useToast } from "../ui";
 
 export default function SkillsPage() {
+  const toast = useToast();
   const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [loadErrors, setLoadErrors] = useState<[string, string][]>([]);
   const [testResults, setTestResults] = useState<Record<string, SkillTestResult[]>>({});
@@ -24,8 +25,10 @@ export default function SkillsPage() {
     try {
       const res = await call<SkillTestResult[]>("skill_run_tests", { name });
       setTestResults((prev) => ({ ...prev, [name]: res }));
+      const passed = res.filter((r) => r.passed).length;
+      toast(passed === res.length ? "success" : "error", `${name} : ${passed}/${res.length} tests verts`);
     } catch (e) {
-      setError(String(e));
+      setError(asIpcError(e).message);
     }
   };
 
@@ -50,7 +53,7 @@ export default function SkillsPage() {
           actions={
             s.local_capable ? (
               <Button onClick={() => runTests(s.name)}>
-                <span className="flex items-center gap-1"><PlayCircle size={14} /> Lancer les tests ({s.tests})</span>
+                <PlayCircle size={ICON_SM} /> Lancer les tests ({s.tests})
               </Button>
             ) : (
               <span className="text-xs text-slate-500">tests via fournisseur LLM</span>

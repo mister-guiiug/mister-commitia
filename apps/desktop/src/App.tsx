@@ -3,6 +3,7 @@ import {
   FolderGit2, GitCommitHorizontal, Server, Sparkles, Settings2, ScrollText, FlaskConical,
 } from "lucide-react";
 import { call, isMock } from "./ipc";
+import { ToastProvider } from "./ui";
 import type { RepoRef } from "./types";
 import ReposPage from "./pages/Repos";
 import AnalyzePage from "./pages/Analyze";
@@ -40,6 +41,7 @@ export default function App() {
   }, []);
 
   return (
+    <ToastProvider>
     <div className="flex h-screen">
       <aside className="flex w-56 shrink-0 flex-col border-r border-slate-800 bg-slate-950">
         <div className="border-b border-slate-800 px-4 py-3">
@@ -95,5 +97,6 @@ export default function App() {
         {tab === "audit" && <AuditPage />}
       </main>
     </div>
+    </ToastProvider>
   );
 }

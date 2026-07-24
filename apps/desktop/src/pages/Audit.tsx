@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Download, RefreshCw } from "lucide-react";
-import { call } from "../ipc";
+import { asIpcError, call } from "../ipc";
 import type { AuditEvent } from "../types";
-import { Badge, Button, Card, Empty, ErrorBox } from "../ui";
+import { Badge, Button, Card, Empty, ErrorBox, ICON_SM, shaCls, thCls, trCls, useToast } from "../ui";
 
 const toneByCategory: Record<string, string> = {
   git_rewrite: "amber",
@@ -13,6 +13,7 @@ const toneByCategory: Record<string, string> = {
 };
 
 export default function AuditPage() {
+  const toast = useToast();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,7 +22,7 @@ export default function AuditPage() {
     try {
       setEvents(await call<AuditEvent[]>("audit_list", { limit: 200 }));
     } catch (e) {
-      setError(String(e));
+      setError(asIpcError(e).message);
     }
   };
 
@@ -38,8 +39,9 @@ export default function AuditPage() {
       a.download = "mister-commitia-audit.jsonl";
       a.click();
       URL.revokeObjectURL(a.href);
+      toast("success", "Journal exporté (JSONL chronologique)");
     } catch (e) {
-      setError(String(e));
+      setError(asIpcError(e).message);
     }
   };
 
@@ -49,8 +51,8 @@ export default function AuditPage() {
         title="Journal d'audit (append-only, secrets masqués)"
         actions={
           <>
-            <Button onClick={refresh}><span className="flex items-center gap-1"><RefreshCw size={14} /> Actualiser</span></Button>
-            <Button onClick={exportJsonl}><span className="flex items-center gap-1"><Download size={14} /> Export JSONL</span></Button>
+            <Button onClick={refresh}><RefreshCw size={ICON_SM} /> Actualiser</Button>
+            <Button onClick={exportJsonl}><Download size={ICON_SM} /> Export JSONL</Button>
           </>
         }
       >
@@ -60,20 +62,20 @@ export default function AuditPage() {
         ) : (
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-800 text-left text-xs uppercase tracking-wide text-slate-500">
-                <th className="py-2 pr-3">#</th>
-                <th className="py-2 pr-3">Horodatage</th>
-                <th className="py-2 pr-3">Catégorie</th>
-                <th className="py-2 pr-3">Action</th>
-                <th className="py-2 pr-3">Cible</th>
-                <th className="py-2">Résultat</th>
+              <tr className="border-b border-slate-800">
+                <th className={thCls}>#</th>
+                <th className={thCls}>Horodatage</th>
+                <th className={thCls}>Catégorie</th>
+                <th className={thCls}>Action</th>
+                <th className={thCls}>Cible</th>
+                <th className={thCls}>Résultat</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70">
               {events.map((e) => (
-                <tr key={e.seq} className="align-top">
+                <tr key={e.seq} className={`align-top ${trCls}`}>
                   <td className="py-1.5 pr-3 text-slate-500">{e.seq}</td>
-                  <td className="py-1.5 pr-3 whitespace-nowrap text-slate-400">{e.ts.replace("T", " ").replace("Z", "")}</td>
+                  <td className={"py-1.5 pr-3 whitespace-nowrap " + shaCls}>{e.ts.replace("T", " ").replace("Z", "")}</td>
                   <td className="py-1.5 pr-3"><Badge tone={toneByCategory[e.category] ?? "slate"}>{e.category}</Badge></td>
                   <td className="py-1.5 pr-3 text-slate-200">{e.action}</td>
                   <td className="py-1.5 pr-3 text-slate-300">{e.target}</td>
