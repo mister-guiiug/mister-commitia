@@ -11,3 +11,5 @@ Thumbs.db
 node_modules/
 target/
 dist/
+*.sqlite
+apps/desktop/src-tauri/gen/schemas/

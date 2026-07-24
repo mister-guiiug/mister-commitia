@@ -1,0 +1,968 @@
+//! Orchestrateur : l'API de haut niveau consommée par l'UI desktop (et par un
+//! futur CLI). Chaque garde-fou vit ICI ou plus bas — jamais dans l'UI.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use crate::ai::{self, Provider, SkillContext};
+use crate::analyzer;
+use crate::ci::{self, CiClient};
+use crate::error::{CoreError, Result};
+use crate::gitx::GitEngine;
+use crate::model::*;
+use crate::plan::{plan_hash, PlanEngine, RiskAxis};
+use crate::secrets;
+use crate::skills::{self, GenOutcome, Skill};
+use crate::store::Store;
+
+pub struct Core {
+    pub store: Store,
+    pub skills_dir: PathBuf,
+    pub actor: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanResult {
+    pub repo: RepoRef,
+    pub branch: String,
+    pub base: Option<String>,
+    pub commits: Vec<CommitInfo>,
+    pub report: AnalysisReport,
+    pub squash_suggestions: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillMeta {
+    pub name: String,
+    pub version: String,
+    pub owner: String,
+    pub status: String,
+    pub description: String,
+    pub output: String,
+    pub guardrails: Vec<String>,
+    pub rules: Vec<String>,
+    pub tests: usize,
+    pub local_capable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillTestResult {
+    pub case: String,
+    pub passed: bool,
+    pub detail: String,
+}
+
+impl Core {
+    pub fn new(db_path: &Path, skills_dir: PathBuf) -> Result<Self> {
+        Ok(Self {
+            store: Store::open(db_path)?,
+            skills_dir,
+            actor: std::env::var("USERNAME")
+                .or_else(|_| std::env::var("USER"))
+                .unwrap_or_else(|_| "local".into()),
+        })
+    }
+
+    pub fn in_memory(skills_dir: PathBuf) -> Result<Self> {
+        Ok(Self {
+            store: Store::open_in_memory()?,
+            skills_dir,
+            actor: "test".into(),
+        })
+    }
+
+    fn audit(&self, category: &str, action: &str, target: &str, params: serde_json::Value, result: &str) {
+        let redacted: serde_json::Value =
+            serde_json::from_str(&secrets::redact(&params.to_string()))
+                .unwrap_or(serde_json::Value::Null);
+        let _ = self
+            .store
+            .audit_append(&self.actor, category, action, target, &redacted, &secrets::redact(result));
+    }
+
+    // -- E1 : dépôts ---------------------------------------------------------
+
+    pub fn repo_declare(&self, path: &str) -> Result<RepoRef> {
+        let repo = GitEngine::open(path)?;
+        let name = Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string());
+        let default_branch = GitEngine::detect_default_branch(&repo);
+        let mut protected = Vec::new();
+        if let Some(d) = &default_branch {
+            protected.push(d.clone());
+        }
+        let r = RepoRef {
+            id: new_id("repo"),
+            name,
+            local_path: path.to_string(),
+            remote_url: GitEngine::remote_url(&repo),
+            default_branch,
+            protected_branches: protected,
+            governance: Governance::default(),
+            added_at: now_iso(),
+            last_scanned_at: None,
+        };
+        self.store.repo_add(&r)?;
+        self.audit("config", "repo_declare", &r.name, json!({"path": path}), "ok");
+        Ok(r)
+    }
+
+    pub fn repo_list(&self) -> Result<Vec<RepoRef>> {
+        self.store.repo_list()
+    }
+
+    pub fn repo_remove(&self, id: &str) -> Result<()> {
+        let r = self.store.repo_get(id)?;
+        self.store.repo_remove(id)?;
+        self.audit("config", "repo_remove", &r.name, json!({}), "ok");
+        Ok(())
+    }
+
+    pub fn repo_update_governance(
+        &self,
+        id: &str,
+        governance: Governance,
+        protected_branches: Vec<String>,
+    ) -> Result<RepoRef> {
+        let mut r = self.store.repo_get(id)?;
+        r.governance = governance;
+        r.protected_branches = protected_branches;
+        self.store.repo_update(&r)?;
+        self.audit("config", "governance_update", &r.name, json!({}), "ok");
+        Ok(r)
+    }
+
+    pub fn repo_branches(&self, id: &str) -> Result<Vec<BranchInfo>> {
+        let r = self.store.repo_get(id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        GitEngine::branches(&repo)
+    }
+
+    // -- E2 : analyse --------------------------------------------------------
+
+    pub fn repo_scan(&self, id: &str, branch: Option<String>) -> Result<ScanResult> {
+        let mut r = self.store.repo_get(id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let branch = branch
+            .or_else(|| GitEngine::head_branch(&repo))
+            .or_else(|| r.default_branch.clone())
+            .ok_or_else(|| CoreError::Invalid("aucune branche à analyser".into()))?;
+        let tip = GitEngine::branch_tip(&repo, &branch)?;
+        let base = match (&r.default_branch, branch.as_str()) {
+            (Some(d), b) if d != b => {
+                let dt = GitEngine::branch_tip(&repo, d)?;
+                let mb = GitEngine::merge_base(&repo, tip, dt)?;
+                if mb == tip { None } else { Some(mb) }
+            }
+            _ => None,
+        };
+        let commits = GitEngine::segment_infos(&repo, base, tip, 500)?;
+        let report = analyzer::analyze_commits(&r, &branch, base.map(|o| o.to_string()).as_deref(), &commits);
+        let squash_suggestions = analyzer::suggest_squash_groups(&commits);
+        r.last_scanned_at = Some(now_iso());
+        self.store.repo_update(&r)?;
+        Ok(ScanResult {
+            repo: r,
+            branch,
+            base: base.map(|o| o.to_string()),
+            commits,
+            report,
+            squash_suggestions,
+        })
+    }
+
+    // -- E3 : plans ----------------------------------------------------------
+
+    pub fn plan_new(&self, repo_id: &str, branch: &str) -> Result<Plan> {
+        let r = self.store.repo_get(repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let plan = PlanEngine::new_plan(&r, &repo, branch)?;
+        self.store.plan_save(&plan)?;
+        Ok(plan)
+    }
+
+    pub fn plan_get(&self, id: &str) -> Result<Plan> {
+        self.store.plan_get(id)
+    }
+
+    pub fn plan_list(&self, repo_id: &str) -> Result<Vec<Plan>> {
+        self.store.plan_list(repo_id)
+    }
+
+    pub fn plan_set_ops(&self, plan_id: &str, ops: Vec<PlanOp>) -> Result<Plan> {
+        let mut plan = self.store.plan_get(plan_id)?;
+        if matches!(plan.status, PlanStatus::Applied | PlanStatus::RolledBack) {
+            return Err(CoreError::Refused(
+                "un plan appliqué est immuable : créer un nouveau plan".into(),
+            ));
+        }
+        plan.ops = ops;
+        plan.status = PlanStatus::Draft;
+        plan.dry_run_hash = None;
+        plan.dry_run_at = None;
+        plan.mapping.clear();
+        self.store.plan_save(&plan)?;
+        Ok(plan)
+    }
+
+    pub fn plan_dry_run(&self, plan_id: &str) -> Result<Plan> {
+        let mut plan = self.store.plan_get(plan_id)?;
+        let r = self.store.repo_get(&plan.repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let outcome = PlanEngine::dry_run(&r, &repo, &mut plan);
+        match &outcome {
+            Ok(()) => self.audit(
+                "git_rewrite",
+                "dry_run",
+                &format!("{}:{}", r.name, plan.fingerprint.branch),
+                json!({"plan": plan.id, "ops": plan.ops.len()}),
+                "ok",
+            ),
+            Err(e) => self.audit(
+                "git_rewrite",
+                "dry_run",
+                &format!("{}:{}", r.name, plan.fingerprint.branch),
+                json!({"plan": plan.id}),
+                &format!("erreur : {e}"),
+            ),
+        }
+        self.store.plan_save(&plan)?;
+        outcome.map(|_| plan)
+    }
+
+    pub fn plan_apply(&self, plan_id: &str, confirm: Option<String>) -> Result<Plan> {
+        let mut plan = self.store.plan_get(plan_id)?;
+        let r = self.store.repo_get(&plan.repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let outcome = PlanEngine::apply(&r, &repo, &mut plan, confirm.as_deref());
+        let result = match &outcome {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("erreur : {e}"),
+        };
+        self.audit(
+            "git_rewrite",
+            "apply",
+            &format!("{}:{}", r.name, plan.fingerprint.branch),
+            json!({"plan": plan.id, "backup_ref": plan.backup_ref, "mapping": plan.mapping.len()}),
+            &result,
+        );
+        self.store.plan_save(&plan)?;
+        outcome.map(|_| plan)
+    }
+
+    pub fn plan_rollback(&self, plan_id: &str) -> Result<Plan> {
+        let mut plan = self.store.plan_get(plan_id)?;
+        let r = self.store.repo_get(&plan.repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let outcome = PlanEngine::rollback(&r, &repo, &mut plan);
+        let result = match &outcome {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("erreur : {e}"),
+        };
+        self.audit(
+            "git_rewrite",
+            "rollback",
+            &format!("{}:{}", r.name, plan.fingerprint.branch),
+            json!({"plan": plan.id, "backup_ref": plan.backup_ref}),
+            &result,
+        );
+        self.store.plan_save(&plan)?;
+        outcome.map(|_| plan)
+    }
+
+    pub fn plan_risk(&self, plan_id: &str) -> Result<Vec<RiskAxis>> {
+        let plan = self.store.plan_get(plan_id)?;
+        let r = self.store.repo_get(&plan.repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        Ok(PlanEngine::risk_report(&r, &repo, &plan))
+    }
+
+    pub fn plan_export(&self, plan_id: &str) -> Result<String> {
+        let plan = self.store.plan_get(plan_id)?;
+        Ok(serde_json::to_string_pretty(&plan)?)
+    }
+
+    pub fn plan_import(&self, repo_id: &str, json_str: &str) -> Result<Plan> {
+        let mut plan: Plan = serde_json::from_str(json_str)?;
+        if plan.version != 1 {
+            return Err(CoreError::Invalid(format!(
+                "version de plan non supportée : {}",
+                plan.version
+            )));
+        }
+        plan.repo_id = repo_id.to_string();
+        plan.id = new_id("pln");
+        plan.status = PlanStatus::Draft;
+        plan.dry_run_hash = None;
+        plan.dry_run_at = None;
+        plan.applied_at = None;
+        plan.preview_ref = None;
+        plan.backup_ref = None;
+        plan.backup_tag = None;
+        plan.mapping.clear();
+        self.store.plan_save(&plan)?;
+        Ok(plan)
+    }
+
+    // -- E4 : skills & IA ----------------------------------------------------
+
+    pub fn skills_load(&self) -> Result<(Vec<Skill>, Vec<(String, String)>)> {
+        skills::load_dir(&self.skills_dir)
+    }
+
+    pub fn skills_list(&self) -> Result<(Vec<SkillMeta>, Vec<(String, String)>)> {
+        let (loaded, errors) = self.skills_load()?;
+        let metas = loaded
+            .iter()
+            .map(|s| SkillMeta {
+                name: s.def.name.clone(),
+                version: s.def.version.clone(),
+                owner: s.def.owner.clone(),
+                status: s.def.status.clone(),
+                description: s.def.description.trim().to_string(),
+                output: s.def.output.as_ref().map(|o| o.kind.clone()).unwrap_or_default(),
+                guardrails: s.def.guardrails.iter().map(|g| g.assert.clone()).collect(),
+                rules: s.def.rules.iter().map(|r| r.text.trim().to_string()).collect(),
+                tests: s.test_cases.len(),
+                local_capable: matches!(
+                    s.def.name.as_str(),
+                    "conventional-commits" | "commit-synthesis" | "ai-signature-cleaner"
+                ),
+            })
+            .collect();
+        Ok((metas, errors))
+    }
+
+    fn skill_by_name(&self, name: &str) -> Result<Skill> {
+        let (loaded, _) = self.skills_load()?;
+        loaded
+            .into_iter()
+            .find(|s| s.def.name == name)
+            .ok_or_else(|| CoreError::NotFound(format!("skill {name}")))
+    }
+
+    fn provider_from_config(&self, cfg: &AiProviderConfig) -> Result<Provider> {
+        Ok(match cfg.kind {
+            AiProviderKind::RuleBased => Provider::RuleBased,
+            AiProviderKind::Ollama => Provider::Ollama {
+                base_url: cfg
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "http://127.0.0.1:11434".into()),
+                model: cfg.model.clone().unwrap_or_else(|| "qwen2.5-coder".into()),
+            },
+            AiProviderKind::OpenAiCompat => Provider::OpenAiCompat {
+                base_url: cfg
+                    .base_url
+                    .clone()
+                    .ok_or_else(|| CoreError::Invalid("base_url requis".into()))?,
+                model: cfg.model.clone().unwrap_or_default(),
+                api_key: match &cfg.key_ref {
+                    Some(r) => secrets::get_secret(r)?,
+                    None => String::new(),
+                },
+            },
+            AiProviderKind::Anthropic => Provider::Anthropic {
+                base_url: cfg
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
+                model: cfg
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "claude-sonnet-5".into()),
+                api_key: secrets::get_secret(
+                    cfg.key_ref
+                        .as_deref()
+                        .ok_or_else(|| CoreError::Invalid("clé d'API absente du coffre".into()))?,
+                )?,
+            },
+        })
+    }
+
+    fn resolve_provider(&self, provider_id: Option<&str>) -> Result<(Provider, String)> {
+        let configs = self.store.ai_provider_list()?;
+        let cfg = match provider_id {
+            Some(id) => configs.into_iter().find(|c| c.id == id),
+            None => configs.into_iter().find(|c| c.is_default),
+        };
+        match cfg {
+            Some(c) => Ok((self.provider_from_config(&c)?, format!("{:?}", c.kind))),
+            None => Ok((Provider::RuleBased, "RuleBased".into())),
+        }
+    }
+
+    fn commits_by_shas(&self, repo_ref: &RepoRef, shas: &[String]) -> Result<Vec<CommitInfo>> {
+        let repo = GitEngine::open(&repo_ref.local_path)?;
+        let empty = std::collections::HashSet::new();
+        shas.iter()
+            .map(|s| {
+                let oid = git2::Oid::from_str(s)
+                    .map_err(|e| CoreError::Invalid(format!("sha {s} : {e}")))?;
+                GitEngine::commit_info(&repo, oid, &empty)
+            })
+            .collect()
+    }
+
+    /// Aperçu exact de ce qui serait transmis au fournisseur (consentement CA-9).
+    pub fn ai_preview(&self, repo_id: &str, skill_name: &str, shas: Vec<String>) -> Result<String> {
+        let r = self.store.repo_get(repo_id)?;
+        let skill = self.skill_by_name(skill_name)?;
+        let commits = self.commits_by_shas(&r, &shas)?;
+        let ctx = SkillContext {
+            skill: &skill,
+            governance: &r.governance,
+            commits: &commits,
+        };
+        Ok(ai::preview_payload(&ctx))
+    }
+
+    /// Génère des propositions pour des groupes de commits. `consent_remote`
+    /// doit être vrai pour un fournisseur distant (aperçu montré à l'utilisateur).
+    pub async fn proposals_generate(
+        &self,
+        repo_id: &str,
+        skill_name: &str,
+        groups: Vec<Vec<String>>,
+        provider_id: Option<String>,
+        consent_remote: bool,
+    ) -> Result<Vec<Proposal>> {
+        let r = self.store.repo_get(repo_id)?;
+        let skill = self.skill_by_name(skill_name)?;
+        let (provider, provider_label) = self.resolve_provider(provider_id.as_deref())?;
+        if provider.is_remote() && !consent_remote {
+            return Err(CoreError::Refused(
+                "envoi à un fournisseur distant : consentement explicite requis (aperçu des données à l'appui)".into(),
+            ));
+        }
+        let mut out = Vec::new();
+        for shas in groups {
+            let commits = self.commits_by_shas(&r, &shas)?;
+            let before = commits
+                .iter()
+                .map(|c| c.full_message())
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+            let ctx = SkillContext {
+                skill: &skill,
+                governance: &r.governance,
+                commits: &commits,
+            };
+            let generated = ai::generate(&provider, &ctx).await;
+            let outcome = match generated {
+                Ok(o) => o,
+                Err(CoreError::Refused(msg)) => GenOutcome::Refusal { explanation: msg },
+                Err(e) => return Err(e),
+            };
+            // Post-conditions applicatives — un prompt n'est pas une sécurité.
+            let outcome = match skills::validate_outcome(&skill, &r.governance, &before, &outcome) {
+                Ok(()) => outcome,
+                Err(CoreError::Refused(msg)) => GenOutcome::Refusal { explanation: msg },
+                Err(e) => return Err(e),
+            };
+            let (after, explanation, risk, status, removed) = match outcome {
+                GenOutcome::Proposal { message, explanation, risk, removed } => {
+                    (Some(message), explanation, risk, ProposalStatus::Proposed, removed)
+                }
+                GenOutcome::Refusal { explanation } => {
+                    (None, explanation, skill.risk_default(), ProposalStatus::Refused, Vec::new())
+                }
+            };
+            let p = Proposal {
+                id: new_id("prp"),
+                repo_id: repo_id.to_string(),
+                skill: skill.def.name.clone(),
+                skill_version: skill.def.version.clone(),
+                targets: shas.clone(),
+                before,
+                after,
+                explanation,
+                risk,
+                status,
+                decision: None,
+                created_at: now_iso(),
+            };
+            self.store.proposal_save(&p)?;
+            self.audit(
+                "skill",
+                "proposal",
+                &format!("{}:{}", r.name, skill.def.name),
+                json!({
+                    "proposal": p.id,
+                    "provider": provider_label,
+                    "targets": p.targets,
+                    "status": p.status,
+                    "retire": removed,
+                }),
+                "ok",
+            );
+            out.push(p);
+        }
+        Ok(out)
+    }
+
+    pub fn proposals_list(&self, repo_id: &str) -> Result<Vec<Proposal>> {
+        self.store.proposal_list(repo_id)
+    }
+
+    /// Décision humaine sur une proposition. Un message édité repasse par les
+    /// garde-fous de la skill (CA-7).
+    pub fn proposal_decide(
+        &self,
+        proposal_id: &str,
+        decision: &str,
+        edited_message: Option<String>,
+    ) -> Result<Proposal> {
+        let mut all: Vec<Proposal> = Vec::new();
+        for r in self.store.repo_list()? {
+            all.extend(self.store.proposal_list(&r.id)?);
+        }
+        let mut p = all
+            .into_iter()
+            .find(|p| p.id == proposal_id)
+            .ok_or_else(|| CoreError::NotFound(format!("proposition {proposal_id}")))?;
+        let repo = self.store.repo_get(&p.repo_id)?;
+        match decision {
+            "accept" => {
+                if p.after.is_none() {
+                    return Err(CoreError::Refused("rien à accepter : la skill a refusé".into()));
+                }
+                p.status = ProposalStatus::Accepted;
+                p.decision = p.after.clone();
+            }
+            "edit" => {
+                let msg = edited_message
+                    .ok_or_else(|| CoreError::Invalid("message édité manquant".into()))?;
+                let skill = self.skill_by_name(&p.skill)?;
+                let outcome = GenOutcome::Proposal {
+                    message: msg.clone(),
+                    explanation: String::new(),
+                    risk: p.risk,
+                    removed: Vec::new(),
+                };
+                skills::validate_outcome(&skill, &repo.governance, &p.before, &outcome)?;
+                p.status = ProposalStatus::Edited;
+                p.decision = Some(msg);
+            }
+            "reject" => {
+                p.status = ProposalStatus::Rejected;
+                p.decision = None;
+            }
+            other => return Err(CoreError::Invalid(format!("décision inconnue : {other}"))),
+        }
+        self.store.proposal_save(&p)?;
+        self.audit(
+            "skill",
+            "decision",
+            &format!("{}:{}", repo.name, p.skill),
+            json!({"proposal": p.id, "decision": decision}),
+            "ok",
+        );
+        Ok(p)
+    }
+
+    /// Runner de tests de skills en mode déterministe (assistant local).
+    pub fn skill_run_tests(&self, name: &str) -> Result<Vec<SkillTestResult>> {
+        let skill = self.skill_by_name(name)?;
+        let mut results = Vec::new();
+        for case in &skill.test_cases {
+            results.push(run_skill_case(&skill, case));
+        }
+        Ok(results)
+    }
+
+    // -- E5 : secrets & fournisseurs IA -------------------------------------
+
+    pub fn required_scopes(&self, kind: CiKind) -> Vec<(String, String)> {
+        secrets::required_scopes(kind)
+    }
+
+    pub fn ai_provider_save(
+        &self,
+        kind: AiProviderKind,
+        base_url: Option<String>,
+        model: Option<String>,
+        api_key: Option<String>,
+        is_default: bool,
+    ) -> Result<AiProviderConfig> {
+        let id = new_id("ai");
+        let key_ref = match api_key {
+            Some(k) if !k.trim().is_empty() => {
+                let reference = format!("ai:{id}");
+                secrets::set_secret(&reference, &k)?;
+                Some(reference)
+            }
+            _ => None,
+        };
+        let cfg = AiProviderConfig {
+            id,
+            kind,
+            base_url,
+            model,
+            key_ref,
+            is_default,
+        };
+        if is_default {
+            for mut other in self.store.ai_provider_list()? {
+                if other.is_default {
+                    other.is_default = false;
+                    self.store.ai_provider_save(&other)?;
+                }
+            }
+        }
+        self.store.ai_provider_save(&cfg)?;
+        self.audit("secret", "ai_provider_save", &format!("{:?}", cfg.kind), json!({"id": cfg.id}), "ok");
+        Ok(cfg)
+    }
+
+    pub fn ai_provider_list(&self) -> Result<Vec<AiProviderConfig>> {
+        self.store.ai_provider_list()
+    }
+
+    pub fn ai_provider_remove(&self, id: &str) -> Result<()> {
+        if let Some(cfg) = self.store.ai_provider_list()?.into_iter().find(|c| c.id == id) {
+            if let Some(r) = &cfg.key_ref {
+                secrets::delete_secret(r)?;
+            }
+        }
+        self.store.ai_provider_remove(id)?;
+        self.audit("secret", "ai_provider_remove", id, json!({}), "ok");
+        Ok(())
+    }
+
+    // -- E6 : CI/CD ----------------------------------------------------------
+
+    pub async fn ci_account_add(
+        &self,
+        kind: CiKind,
+        base_url: String,
+        org: Option<String>,
+        project: Option<String>,
+        repo: Option<String>,
+        token: String,
+        scopes: Vec<String>,
+    ) -> Result<(CiAccount, String)> {
+        let id = new_id("acct");
+        let token_ref = format!("ci:{id}");
+        let account = CiAccount {
+            id,
+            kind,
+            base_url,
+            org,
+            project,
+            repo,
+            token_ref: token_ref.clone(),
+            scopes,
+            added_at: now_iso(),
+        };
+        let client = CiClient::from_account(&account, token.clone())?;
+        let validation = client.validate().await?;
+        secrets::set_secret(&token_ref, &token)?;
+        self.store.ci_account_save(&account)?;
+        self.audit(
+            "secret",
+            "ci_account_add",
+            &format!("{:?}:{}", account.kind, account.base_url),
+            json!({"id": account.id, "scopes": account.scopes}),
+            "ok",
+        );
+        Ok((account, validation))
+    }
+
+    pub fn ci_account_list(&self) -> Result<Vec<CiAccount>> {
+        self.store.ci_account_list()
+    }
+
+    pub fn ci_account_remove(&self, id: &str) -> Result<()> {
+        let a = self.store.ci_account_get(id)?;
+        secrets::delete_secret(&a.token_ref)?;
+        self.store.ci_account_remove(id)?;
+        self.audit("secret", "ci_account_remove", &a.base_url, json!({}), "ok");
+        Ok(())
+    }
+
+    fn client_for(&self, account_id: &str) -> Result<(CiAccount, CiClient)> {
+        let account = self.store.ci_account_get(account_id)?;
+        let token = secrets::get_secret(&account.token_ref)?;
+        let client = CiClient::from_account(&account, token)?;
+        Ok((account, client))
+    }
+
+    pub async fn ci_inventory(&self, account_id: &str, max: usize) -> Result<Vec<CiRun>> {
+        let (_, client) = self.client_for(account_id)?;
+        client.list_runs(max).await
+    }
+
+    pub fn policy_save(&self, name: String, rules: RetentionRules) -> Result<RetentionPolicy> {
+        let p = RetentionPolicy {
+            id: new_id("pol"),
+            name,
+            rules,
+            enabled: true,
+        };
+        self.store.policy_save(&p)?;
+        Ok(p)
+    }
+
+    pub fn policy_list(&self) -> Result<Vec<RetentionPolicy>> {
+        self.store.policy_list()
+    }
+
+    /// Simulation : AUCUNE suppression, un rapport détaillé, journalisé.
+    pub async fn ci_simulate(
+        &self,
+        account_id: &str,
+        policy_id: &str,
+        max: usize,
+    ) -> Result<SimulationReport> {
+        let (account, client) = self.client_for(account_id)?;
+        let policy = self.store.policy_get(policy_id)?;
+        let runs = client.list_runs(max).await?;
+        let report = ci::simulate(&policy, &account, &runs, chrono::Utc::now());
+        let job = CleanupJob {
+            id: new_id("job"),
+            policy_id: policy.id.clone(),
+            account_id: account.id.clone(),
+            mode: JobMode::Simulation,
+            status: "ok".into(),
+            report: serde_json::to_value(&report)?,
+            created_at: now_iso(),
+            finished_at: Some(now_iso()),
+        };
+        self.store.job_save(&job)?;
+        self.audit(
+            "ci_cleanup",
+            "simulate",
+            &account.base_url,
+            json!({
+                "policy": policy.name,
+                "total": report.total,
+                "candidats": report.candidates.len(),
+                "proteges": report.protected.len(),
+            }),
+            "ok",
+        );
+        Ok(report)
+    }
+
+    /// Suppression unitaire (CA-11/CA-12) : exige une simulation préalable du
+    /// même périmètre contenant ce run, et la saisie du nom du pipeline.
+    pub async fn ci_delete_run(
+        &self,
+        account_id: &str,
+        policy_id: &str,
+        run: CiRun,
+        confirm: String,
+    ) -> Result<()> {
+        let (account, client) = self.client_for(account_id)?;
+        let policy = self.store.policy_get(policy_id)?;
+        let scope = ci::scope_hash(&account, &policy);
+        let sim = self
+            .store
+            .last_simulation(&scope)?
+            .ok_or_else(|| CoreError::Refused("aucune simulation préalable pour ce périmètre : exécuter la simulation d'abord".into()))?;
+        if !sim.candidates.iter().any(|c| c.run_id == run.run_id) {
+            return Err(CoreError::Refused(
+                "ce run n'est pas dans les candidats du rapport de simulation".into(),
+            ));
+        }
+        if confirm != run.pipeline_name {
+            return Err(CoreError::Refused(format!(
+                "confirmation invalide : saisir exactement « {} »",
+                run.pipeline_name
+            )));
+        }
+        // Journalisation AVANT l'appel de suppression (CA-11).
+        self.audit(
+            "ci_cleanup",
+            "delete_attempt",
+            &account.base_url,
+            json!({"run": run.run_id, "pipeline": run.pipeline_name, "policy": policy.name}),
+            "tentative",
+        );
+        let outcome = client.delete_run(&run).await;
+        let result = match &outcome {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("erreur : {e}"),
+        };
+        self.audit(
+            "ci_cleanup",
+            "delete",
+            &account.base_url,
+            json!({"run": run.run_id, "pipeline": run.pipeline_name}),
+            &result,
+        );
+        outcome
+    }
+
+    pub fn job_list(&self) -> Result<Vec<CleanupJob>> {
+        self.store.job_list()
+    }
+
+    // -- E7 : audit ----------------------------------------------------------
+
+    pub fn audit_list(&self, limit: u32) -> Result<Vec<AuditEvent>> {
+        self.store.audit_list(limit)
+    }
+
+    pub fn audit_export(&self) -> Result<String> {
+        self.store.audit_export_jsonl()
+    }
+
+    // utilitaire pour l'UI : hash courant d'un plan (détection de dérive)
+    pub fn plan_current_hash(&self, plan_id: &str) -> Result<String> {
+        let p = self.store.plan_get(plan_id)?;
+        Ok(plan_hash(&p.fingerprint, &p.ops))
+    }
+}
+
+/// Exécute un cas de test de skill en mode déterministe (assistant local).
+fn run_skill_case(skill: &Skill, case: &skills::SkillTestCase) -> SkillTestResult {
+    use serde_yaml::Value as Y;
+
+    let g = &case.given;
+    let mut governance = Governance::default();
+    if let Some(gov) = g.get("governance") {
+        if let Some(p) = gov.get("ai_attribution_policy").and_then(Y::as_str) {
+            governance.ai_attribution_policy = if p == "keep-required" {
+                AiAttributionPolicy::KeepRequired
+            } else {
+                AiAttributionPolicy::NormalizationAllowed
+            };
+        }
+    }
+    let given_files: Vec<String> = g
+        .get("files")
+        .and_then(Y::as_sequence)
+        .map(|s| {
+            s.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mk_commit = |subject: String, body: String, files: Vec<String>| CommitInfo {
+        sha: "0000000000000000000000000000000000000000".into(),
+        short: "00000000".into(),
+        parents: vec![],
+        author_name: "test".into(),
+        author_email: "test@example.org".into(),
+        date: String::new(),
+        trailers: GitEngine::parse_trailers(&format!("{subject}\n\n{body}")),
+        subject,
+        body,
+        is_merge: false,
+        signed: false,
+        on_remote: false,
+        files_changed: files.len().max(1),
+        insertions: 10,
+        deletions: 2,
+        files,
+    };
+    let commits: Vec<CommitInfo> = if let Some(msgs) = g.get("messages").and_then(Y::as_sequence) {
+        msgs.iter()
+            .map(|m| {
+                let full = match m {
+                    Y::String(s) => s.clone(),
+                    other => serde_yaml::to_string(other).unwrap_or_default(),
+                };
+                let (subject, body) = full.split_once('\n').unwrap_or((full.as_str(), ""));
+                mk_commit(subject.trim().to_string(), body.trim().to_string(), Vec::new())
+            })
+            .collect()
+    } else {
+        let subject = g.get("subject").and_then(Y::as_str).unwrap_or("").to_string();
+        let body = g.get("body").and_then(Y::as_str).unwrap_or("").trim().to_string();
+        vec![mk_commit(subject, body, given_files)]
+    };
+
+    let ctx = SkillContext {
+        skill,
+        governance: &governance,
+        commits: &commits,
+    };
+    let outcome = match crate::ai::rule_based::generate(&ctx) {
+        Ok(o) => o,
+        Err(e) => {
+            return SkillTestResult {
+                case: case.name.clone(),
+                passed: false,
+                detail: format!("génération impossible : {e}"),
+            }
+        }
+    };
+    let before = ctx.before();
+    let outcome = match skills::validate_outcome(skill, &governance, &before, &outcome) {
+        Ok(()) => outcome,
+        Err(CoreError::Refused(msg)) => GenOutcome::Refusal { explanation: msg },
+        Err(e) => {
+            return SkillTestResult {
+                case: case.name.clone(),
+                passed: false,
+                detail: e.to_string(),
+            }
+        }
+    };
+
+    let e = &case.expect;
+    let message = match &outcome {
+        GenOutcome::Proposal { message, .. } => Some(message.clone()),
+        GenOutcome::Refusal { .. } => None,
+    };
+    let mut failures: Vec<String> = Vec::new();
+    let mut checked = 0;
+    if let Some(want) = e.get("must_refuse").and_then(Y::as_bool) {
+        checked += 1;
+        if want != message.is_none() {
+            failures.push(format!("must_refuse={want} non satisfait"));
+        }
+    }
+    if let Some(sub) = e.get("contains").and_then(Y::as_str) {
+        checked += 1;
+        if !message.as_deref().unwrap_or("").contains(sub) {
+            failures.push(format!("contains « {sub} » absent"));
+        }
+    }
+    if let Some(sub) = e.get("not_contains").and_then(Y::as_str) {
+        checked += 1;
+        if message.as_deref().unwrap_or("").contains(sub) {
+            failures.push(format!("not_contains « {sub} » présent"));
+        }
+    }
+    if let Some(pat) = e.get("matches").and_then(Y::as_str) {
+        checked += 1;
+        match regex::Regex::new(pat) {
+            Ok(re) => {
+                let subject = message
+                    .as_deref()
+                    .unwrap_or("")
+                    .lines()
+                    .next()
+                    .unwrap_or("");
+                if !re.is_match(subject) {
+                    failures.push(format!("matches « {pat} » non satisfait ({subject})"));
+                }
+            }
+            Err(err) => failures.push(format!("pattern invalide : {err}")),
+        }
+    }
+    if checked == 0 {
+        return SkillTestResult {
+            case: case.name.clone(),
+            passed: true,
+            detail: "aucune assertion exécutable (cas informatif)".into(),
+        };
+    }
+    SkillTestResult {
+        case: case.name.clone(),
+        passed: failures.is_empty(),
+        detail: if failures.is_empty() {
+            "ok".into()
+        } else {
+            failures.join(" ; ")
+        },
+    }
+}

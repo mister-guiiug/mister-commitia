@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/mc-core", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mister-guiiug/mister-commitia"
+
+[profile.release]
+lto = "thin"
+strip = true
