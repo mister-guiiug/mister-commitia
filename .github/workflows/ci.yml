@@ -29,6 +29,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Tests du cœur
         run: cargo test -p mc-core --locked
+      - name: Compilation du binaire desktop (Windows/MSVC)
+        if: runner.os == 'Windows'
+        run: cargo check -p mc-desktop --locked
 
   front:
     name: Build front (type-check + vite)
