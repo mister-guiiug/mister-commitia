@@ -29,6 +29,7 @@
 | 13 | [Parcours utilisateur](docs/13-parcours-utilisateur.md) | 3 parcours de référence pas à pas |
 | 14 | [Critères d'acceptation](docs/14-criteres-acceptation.md) | 14 groupes de scénarios Gherkin |
 | 15 | [Stratégie de tests](docs/15-strategie-tests.md) | Fixtures Git, invariants, contrats API, E2E, sécurité |
+| 16 | [Améliorations proposées](docs/16-ameliorations.md) | Post-MVP : fonctionnel, technique, harmonisation UX/UI, priorisation |
 
 Les six skills attendues sont fournies en exemples exécutables dans [`skills/`](skills/) (`conventional-commits` sert de référence complète : manifeste + prompt + tests).
 
