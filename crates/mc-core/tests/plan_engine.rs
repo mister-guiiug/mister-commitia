@@ -1,8 +1,37 @@
 mod common;
 
 use common::*;
+use git2::Repository;
 use mc_core::model::*;
 use mc_core::task::{CancelToken, TaskCtx, TaskEvent};
+
+/// Réécrit (reword) puis applique un plan sur `feature/checkout`, la faisant
+/// diverger de son remote-tracking. Retourne le nouveau sommet local.
+fn rewrite_and_apply(core: &mc_core::Core, repo_id: &str, target: git2::Oid) -> String {
+    let plan = core.plan_new(repo_id, "feature/checkout").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Reword {
+                    target: target.to_string(),
+                    new_message: "refactor(pay): message reecrit".into(),
+                },
+            )],
+        )
+        .unwrap();
+    core.plan_dry_run(&plan.id).unwrap();
+    // Branche partagée (poussée) → confirmation renforcée exigée.
+    let applied = core
+        .plan_apply(&plan.id, Some("feature/checkout".into()))
+        .unwrap();
+    applied
+        .mapping
+        .last()
+        .map(|m| m.new.clone())
+        .expect("nouveau sommet")
+}
 
 /// CA-3 + CA-4 : le dry-run construit le résultat réel dans refs/mc/preview
 /// sans toucher la branche ; un plan 100 % reword ne change aucun arbre.
@@ -126,6 +155,136 @@ fn t2_dry_run_cancelled_writes_nothing_and_emits_phases() {
     assert_eq!(phases.first().unwrap(), "vérification de l'empreinte");
     assert!(phases.iter().any(|p| p == "réécriture des messages"));
     assert!(phases.iter().any(|p| p.contains("écriture de la préview")));
+}
+
+/// F4 : après réécriture, le preview signale la divergence et exige un push
+/// forcé ; l'exécution sans confirmation est refusée, puis le force-with-lease
+/// réécrit bien la branche distante.
+#[tokio::test]
+async fn f4_push_preview_and_forced_push_succeeds() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let bare = add_remote_and_push(&f, "feature/checkout");
+
+    let new_tip = rewrite_and_apply(&core, &repo_id, shas[1]);
+
+    let preview = core
+        .push_preview(&repo_id, "feature/checkout", None)
+        .await
+        .unwrap();
+    assert!(preview.can_push);
+    assert!(preview.needs_force, "l'historique distant diverge");
+    assert!(!preview.protected);
+    assert!(preview.behind > 0 && preview.ahead > 0);
+    assert_eq!(
+        preview.remote_tip.as_deref(),
+        Some(shas[3].to_string().as_str())
+    );
+    assert!(preview.open_prs.is_none(), "aucun accès GitHub fourni");
+
+    // Sans confirmation → refus typé.
+    let err = core
+        .push_execute(&repo_id, "feature/checkout", None)
+        .unwrap_err();
+    assert_eq!(err.code(), "confirm_required");
+    assert_eq!(err.expected(), Some("feature/checkout"));
+
+    // Confirmation exacte → force-with-lease réussi.
+    let res = core
+        .push_execute(
+            &repo_id,
+            "feature/checkout",
+            Some("feature/checkout".into()),
+        )
+        .unwrap();
+    assert!(res.forced);
+    assert_eq!(res.remote_tip, new_tip);
+
+    // Le remote a bien été réécrit sur le nouveau sommet.
+    let bare_repo = Repository::open(bare.path()).unwrap();
+    let remote_head = bare_repo
+        .refname_to_id("refs/heads/feature/checkout")
+        .unwrap()
+        .to_string();
+    assert_eq!(remote_head, new_tip);
+
+    // Journal : tentative avant résultat ok.
+    let audit = core.audit_list(50).unwrap();
+    let attempt = audit.iter().find(|e| e.action == "push_attempt").unwrap();
+    let done = audit.iter().find(|e| e.action == "push").unwrap();
+    assert!(attempt.seq < done.seq);
+    assert_eq!(done.result, "ok");
+}
+
+/// F4 : le bail --force-with-lease protège le travail distant non revu — si le
+/// remote a bougé depuis le dernier fetch, le push forcé est refusé par git et
+/// n'écrase RIEN.
+#[tokio::test]
+async fn f4_force_with_lease_aborts_when_remote_moved() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let bare = add_remote_and_push(&f, "feature/checkout");
+
+    rewrite_and_apply(&core, &repo_id, shas[1]);
+    // Le preview fetch et fixe le bail sur le sommet distant courant (shas[3]).
+    let preview = core
+        .push_preview(&repo_id, "feature/checkout", None)
+        .await
+        .unwrap();
+    assert!(preview.needs_force);
+
+    // Un collègue déplace la branche distante (simulé : la ref du bare bouge).
+    let bare_repo = Repository::open(bare.path()).unwrap();
+    bare_repo
+        .reference("refs/heads/feature/checkout", shas[0], true, "collegue")
+        .unwrap();
+
+    // Le push forcé s'appuie sur le bail (shas[3]) ≠ état réel (shas[0]) → abort.
+    let err = core
+        .push_execute(
+            &repo_id,
+            "feature/checkout",
+            Some("feature/checkout".into()),
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "git", "git refuse le push (stale info) : {err}");
+
+    // Le remote est resté sur la position du collègue : rien écrasé.
+    let bare_repo = Repository::open(bare.path()).unwrap();
+    assert_eq!(
+        bare_repo
+            .refname_to_id("refs/heads/feature/checkout")
+            .unwrap(),
+        shas[0]
+    );
+}
+
+/// F4 : le push forcé est refusé net sur une branche protégée.
+#[tokio::test]
+async fn f4_force_push_refused_on_protected_branch() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let _bare = add_remote_and_push(&f, "feature/checkout");
+    rewrite_and_apply(&core, &repo_id, shas[1]);
+
+    // On protège explicitement la branche de travail.
+    let repo = core.repo_list().unwrap().into_iter().next().unwrap();
+    core.repo_update_governance(
+        &repo_id,
+        repo.governance.clone(),
+        vec!["main".into(), "feature/checkout".into()],
+    )
+    .unwrap();
+
+    let err = core
+        .push_execute(
+            &repo_id,
+            "feature/checkout",
+            Some("feature/checkout".into()),
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "refused");
+    assert!(err.to_string().contains("protégée"), "{err}");
 }
 
 /// CA-3 : pas d'application sans dry-run du même plan.

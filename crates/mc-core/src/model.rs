@@ -419,6 +419,18 @@ pub struct AiProviderConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Push assisté
+// ---------------------------------------------------------------------------
+
+/// Pull request ouverte détectée pour une branche (push assisté, F4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrRef {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+}
+
+// ---------------------------------------------------------------------------
 // Audit
 // ---------------------------------------------------------------------------
 

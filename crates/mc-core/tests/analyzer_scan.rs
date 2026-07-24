@@ -125,6 +125,73 @@ fn t2_scan_cancel_mid_flight_stops_at_next_checkpoint() {
     assert_eq!(err.code(), "cancelled");
 }
 
+/// F1 : segment linéaire → une seule lane, et le parent du plus ancien commit
+/// (la base) est hors segment (arête-borne).
+#[test]
+fn f1_graph_linear_single_lane_with_boundary_base() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let scan = core
+        .repo_scan(&repo_id, Some("feature/checkout".into()))
+        .unwrap();
+    let g = &scan.graph;
+    assert_eq!(g.lanes, 1, "chaîne linéaire : une lane");
+    assert_eq!(g.nodes.len(), 4);
+    assert!(g.nodes.iter().all(|n| n.lane == 0));
+    // Le plus récent est en tête (row 0), le plus ancien en dernier.
+    assert_eq!(g.nodes[0].sha, shas[3].to_string());
+    assert_eq!(g.nodes[3].sha, shas[0].to_string());
+    // Le plus ancien pointe vers la base, hors segment.
+    let oldest = &g.nodes[3];
+    assert_eq!(oldest.parents.len(), 1);
+    assert!(!oldest.parents[0].in_segment, "la base est hors segment");
+    // Les autres parents sont dans le segment.
+    for n in &g.nodes[..3] {
+        assert!(n.parents.iter().all(|p| p.in_segment));
+        assert!(!n.is_merge);
+    }
+}
+
+/// F1 : un merge interne rend le graphe non linéaire (≥ 2 lanes) ; le nœud de
+/// merge a deux parents du segment qui convergent vers un même ancêtre.
+#[test]
+fn f1_graph_merge_uses_multiple_lanes() {
+    let (f, (c, d, e, m)) = merge_fixture();
+    let (core, repo_id) = core_with(&f);
+    let scan = core
+        .repo_scan(&repo_id, Some("feature/merge".into()))
+        .unwrap();
+    let g = &scan.graph;
+    assert_eq!(g.nodes.len(), 4, "segment C,D,E,M");
+    assert!(
+        g.lanes >= 2,
+        "un merge occupe au moins deux lanes : {}",
+        g.lanes
+    );
+
+    let node = |oid: git2::Oid| g.nodes.iter().find(|n| n.sha == oid.to_string()).unwrap();
+    let mn = node(m);
+    assert!(mn.is_merge && mn.parents.len() == 2);
+    assert!(
+        mn.parents.iter().all(|p| p.in_segment),
+        "D et E sont dans le segment"
+    );
+    // D et E vivent en parallèle → lanes distinctes.
+    assert_ne!(
+        node(d).lane,
+        node(e).lane,
+        "les deux lignes sont sur des colonnes différentes"
+    );
+    // C (le plus ancien) borne le segment vers la base (A, hors segment).
+    let cn = node(c);
+    assert_eq!(cn.row, 3);
+    assert!(cn.parents.iter().all(|p| !p.in_segment));
+    // Toutes les colonnes référencées restent bornées par la largeur annoncée.
+    for n in &g.nodes {
+        assert!(n.lane < g.lanes);
+    }
+}
+
 #[test]
 fn commit_infos_carry_files_signatures_and_trailers() {
     let (f, shas) = feature_fixture();

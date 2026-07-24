@@ -45,6 +45,17 @@ impl CiClient {
         }
     }
 
+    /// Pull requests ouvertes dont la source est `branch` (push assisté, F4).
+    /// Azure DevOps n'est pas couvert ici (API distincte).
+    pub async fn list_open_prs(&self, branch: &str) -> Result<Vec<PrRef>> {
+        match self {
+            CiClient::Github(c) => c.list_open_prs(branch).await,
+            CiClient::AzDo(_) => Err(CoreError::Invalid(
+                "détection des PR non implémentée pour Azure DevOps".into(),
+            )),
+        }
+    }
+
     /// Suppression UNITAIRE. Refuse en amont les runs protégés ; vérifie les
     /// leases côté Azure DevOps immédiatement avant l'appel.
     pub async fn delete_run(&self, run: &CiRun) -> Result<()> {

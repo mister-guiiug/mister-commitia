@@ -32,6 +32,9 @@ pub struct ScanResult {
     pub commits: Vec<CommitInfo>,
     pub report: AnalysisReport,
     pub squash_suggestions: Vec<Vec<String>>,
+    /// Disposition en lanes de l'historique réel (vue graphe, F1). Reflète la
+    /// topologie git courante, indépendamment d'un réordonnancement proposé.
+    pub graph: crate::graph::CommitGraph,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +60,35 @@ pub struct SkillTestResult {
 
 /// Métadonnées de skills + erreurs de chargement (nom, motif).
 pub type SkillsListing = (Vec<SkillMeta>, Vec<(String, String)>);
+
+/// Aperçu du push assisté (F4) : état de divergence, bail de force-with-lease,
+/// PR ouvertes détectées, avertissements de coordination. Aucun effet de bord.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushPreview {
+    pub remote: Option<String>,
+    pub remote_url: Option<String>,
+    pub branch: String,
+    pub local_tip: String,
+    /// SHA de la ref remote-tracking (le bail de `--force-with-lease`).
+    pub remote_tip: Option<String>,
+    pub ahead: usize,
+    pub behind: usize,
+    /// Vrai si le push n'est pas un fast-forward (réécriture distante).
+    pub needs_force: bool,
+    pub protected: bool,
+    pub can_push: bool,
+    /// PR ouvertes sur cette branche ; `None` = non vérifié (pas d'accès GitHub).
+    pub open_prs: Option<Vec<PrRef>>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushResult {
+    pub branch: String,
+    pub forced: bool,
+    pub remote_tip: String,
+    pub detail: String,
+}
 
 impl Core {
     pub fn new(db_path: &Path, skills_dir: PathBuf) -> Result<Self> {
@@ -217,6 +249,7 @@ impl Core {
             &commits,
         );
         let squash_suggestions = analyzer::suggest_squash_groups(&commits);
+        let graph = crate::graph::build_graph(&commits);
         r.last_scanned_at = Some(now_iso());
         self.store.repo_update(&r)?;
         Ok(ScanResult {
@@ -226,6 +259,7 @@ impl Core {
             commits,
             report,
             squash_suggestions,
+            graph,
         })
     }
 
@@ -382,6 +416,226 @@ impl Core {
         plan.mapping.clear();
         self.store.plan_save(&plan)?;
         Ok(plan)
+    }
+
+    // -- E3b : push assisté (F4) --------------------------------------------
+
+    /// Divergence entre la branche locale et le remote-tracking. Rafraîchit
+    /// d'abord la ref remote-tracking (fetch) pour un état exact et un bail sûr.
+    async fn push_facts(
+        &self,
+        repo_ref: &RepoRef,
+        branch: &str,
+        do_fetch: bool,
+    ) -> Result<(bool, Option<String>, usize, usize)> {
+        let repo = GitEngine::open(&repo_ref.local_path)?;
+        let has_remote = repo.find_remote("origin").is_ok();
+        if !has_remote {
+            return Ok((false, None, 0, 0));
+        }
+        let local_tip = GitEngine::branch_tip(&repo, branch)?;
+        if do_fetch {
+            let dir = repo
+                .workdir()
+                .ok_or_else(|| CoreError::Refused("dépôt bare".into()))?
+                .to_path_buf();
+            let _ = crate::gitx::push::fetch_branch(&dir, "origin", branch);
+        }
+        let remote_tip = repo
+            .refname_to_id(&format!("refs/remotes/origin/{branch}"))
+            .ok();
+        let (ahead, behind) = match remote_tip {
+            Some(rt) => repo.graph_ahead_behind(local_tip, rt).unwrap_or((0, 0)),
+            None => (0, 0),
+        };
+        Ok((true, remote_tip.map(|o| o.to_string()), ahead, behind))
+    }
+
+    /// PR ouvertes pour `branch` via un accès GitHub explicite (best-effort).
+    async fn detect_open_prs(
+        &self,
+        branch: &str,
+        ci_account_id: Option<&str>,
+        warnings: &mut Vec<String>,
+    ) -> Option<Vec<PrRef>> {
+        let account = self.store.ci_account_get(ci_account_id?).ok()?;
+        if !matches!(account.kind, CiKind::Github | CiKind::GithubEnterprise) {
+            warnings.push("détection des PR : uniquement pour un accès GitHub.".into());
+            return None;
+        }
+        let token = secrets::get_secret(&account.token_ref).ok()?;
+        let client = CiClient::from_account(&account, token).ok()?;
+        match client.list_open_prs(branch).await {
+            Ok(prs) => Some(prs),
+            Err(e) => {
+                warnings.push(format!("PR non vérifiées : {e}"));
+                None
+            }
+        }
+    }
+
+    pub async fn push_preview(
+        &self,
+        repo_id: &str,
+        branch: &str,
+        ci_account_id: Option<String>,
+    ) -> Result<PushPreview> {
+        let r = self.store.repo_get(repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let local_tip = GitEngine::branch_tip(&repo, branch)?;
+        let remote_url = GitEngine::remote_url(&repo);
+        let protected = r.protected_branches.iter().any(|b| b == branch)
+            || r.default_branch.as_deref() == Some(branch);
+        let mut warnings = Vec::new();
+
+        let (has_remote, remote_tip, ahead, behind) = self.push_facts(&r, branch, true).await?;
+        if !has_remote {
+            warnings.push("aucun remote « origin » configuré : push impossible.".into());
+            return Ok(PushPreview {
+                remote: None,
+                remote_url,
+                branch: branch.to_string(),
+                local_tip: local_tip.to_string(),
+                remote_tip: None,
+                ahead: 0,
+                behind: 0,
+                needs_force: false,
+                protected,
+                can_push: false,
+                open_prs: None,
+                warnings,
+            });
+        }
+        let needs_force = behind > 0;
+        if remote_tip.is_none() {
+            warnings.push("nouvelle branche : premier push (aucune version distante).".into());
+        }
+        if needs_force {
+            warnings.push(format!(
+                "réécriture de l'historique distant : {behind} commit(s) distant(s) seront remplacés. \
+                 À coordonner (les collègues devront réaligner leur copie) ; push forcé sécurisé par --force-with-lease."
+            ));
+        }
+        if protected && needs_force {
+            warnings.push(format!(
+                "« {branch} » est protégée : le push forcé sera refusé."
+            ));
+        }
+        let open_prs = self
+            .detect_open_prs(branch, ci_account_id.as_deref(), &mut warnings)
+            .await;
+        if let Some(prs) = &open_prs {
+            if !prs.is_empty() && needs_force {
+                warnings.push(format!(
+                    "{} PR ouverte(s) sur cette branche : le push forcé mettra à jour leur contenu.",
+                    prs.len()
+                ));
+            }
+        }
+        Ok(PushPreview {
+            remote: Some("origin".into()),
+            remote_url,
+            branch: branch.to_string(),
+            local_tip: local_tip.to_string(),
+            remote_tip,
+            ahead,
+            behind,
+            needs_force,
+            protected,
+            can_push: true,
+            open_prs,
+            warnings,
+        })
+    }
+
+    /// Pousse la branche. Force-with-lease requis quand l'historique distant
+    /// diverge : refusé sur branche protégée, confirmation renforcée exigée,
+    /// journalisé avant/après. N'effectue PAS de fetch : le bail s'appuie sur le
+    /// remote-tracking déjà vu (protège tout travail distant non revu).
+    pub fn push_execute(
+        &self,
+        repo_id: &str,
+        branch: &str,
+        confirm: Option<String>,
+    ) -> Result<PushResult> {
+        let r = self.store.repo_get(repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        if repo.find_remote("origin").is_err() {
+            return Err(CoreError::Refused(
+                "aucun remote « origin » configuré".into(),
+            ));
+        }
+        let dir = repo
+            .workdir()
+            .ok_or_else(|| CoreError::Refused("dépôt bare".into()))?
+            .to_path_buf();
+        let local_tip = GitEngine::branch_tip(&repo, branch)?;
+        let remote_tip = repo
+            .refname_to_id(&format!("refs/remotes/origin/{branch}"))
+            .ok();
+        let behind = match remote_tip {
+            Some(rt) => repo.graph_ahead_behind(local_tip, rt).unwrap_or((0, 0)).1,
+            None => 0,
+        };
+        let needs_force = behind > 0;
+        let protected = r.protected_branches.iter().any(|b| b == branch)
+            || r.default_branch.as_deref() == Some(branch);
+
+        if needs_force && protected {
+            return Err(CoreError::Refused(format!(
+                "« {branch} » est protégée : push forcé refusé (réécriture d'historique distant interdite)"
+            )));
+        }
+        if needs_force && confirm.as_deref() != Some(branch) {
+            return Err(CoreError::ConfirmRequired {
+                expected: branch.to_string(),
+                message: format!(
+                    "push forcé (--force-with-lease) : saisir exactement « {branch} » pour confirmer la réécriture de l'historique distant"
+                ),
+            });
+        }
+
+        self.audit(
+            "git_push",
+            "push_attempt",
+            &format!("{}:{}", r.name, branch),
+            json!({
+                "force": needs_force,
+                "remote_tip": remote_tip.map(|o| o.to_string()),
+                "local_tip": local_tip.to_string(),
+            }),
+            "tentative",
+        );
+        let lease = if needs_force {
+            remote_tip.map(|o| o.to_string())
+        } else {
+            None
+        };
+        let set_upstream = remote_tip.is_none();
+        let outcome =
+            crate::gitx::push::push_branch(&dir, "origin", branch, lease.as_deref(), set_upstream);
+        let result = match &outcome {
+            Ok(()) => "ok".to_string(),
+            Err(e) => format!("erreur : {e}"),
+        };
+        self.audit(
+            "git_push",
+            "push",
+            &format!("{}:{}", r.name, branch),
+            json!({"force": needs_force, "lease": lease}),
+            &result,
+        );
+        outcome?;
+        Ok(PushResult {
+            branch: branch.to_string(),
+            forced: needs_force,
+            remote_tip: local_tip.to_string(),
+            detail: if needs_force {
+                "historique distant réécrit (force-with-lease)".into()
+            } else {
+                "commits poussés".into()
+            },
+        })
     }
 
     // -- E4 : skills & IA ----------------------------------------------------

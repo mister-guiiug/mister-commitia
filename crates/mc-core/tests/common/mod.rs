@@ -114,6 +114,94 @@ pub fn feature_fixture() -> (Fixture, Vec<Oid>) {
     (f, vec![c1, c2, c3, c4])
 }
 
+/// Bascule HEAD sur une branche EXISTANTE (checkout dur).
+pub fn checkout_existing(repo: &Repository, name: &str) {
+    repo.set_head(&format!("refs/heads/{name}")).unwrap();
+    repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+}
+
+/// Crée un commit de merge (plusieurs parents) sur HEAD à partir de l'index
+/// courant (les fichiers doivent déjà être écrits/ajoutés).
+pub fn merge_commit(
+    repo: &Repository,
+    parents: &[Oid],
+    files: &[(&str, &str)],
+    msg: &str,
+    t: i64,
+) -> Oid {
+    let workdir = repo.workdir().unwrap();
+    for (p, c) in files {
+        let full = workdir.join(p);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(full, c).unwrap();
+    }
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let s = sig(t);
+    let commits: Vec<_> = parents
+        .iter()
+        .map(|p| repo.find_commit(*p).unwrap())
+        .collect();
+    let refs: Vec<&git2::Commit> = commits.iter().collect();
+    repo.commit(Some("HEAD"), &s, &s, msg, &tree, &refs)
+        .unwrap()
+}
+
+/// Dépôt avec un MERGE interne dans le segment : `main` (A) + `feature/merge`
+/// = C, puis D (feature) et E (branche side depuis C), fusionnés en M.
+/// Segment base(A)..M = {C, D, E, M}. Retourne (C, D, E, M).
+pub fn merge_fixture() -> (Fixture, (Oid, Oid, Oid, Oid)) {
+    let f = init_repo();
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n")],
+        "chore: init",
+        1_700_000_000,
+    );
+    checkout_new_branch(&f.repo, "feature/merge");
+    let c = commit(
+        &f.repo,
+        &[("src/c.rs", "// c\n")],
+        "feat: base feature",
+        1_700_000_100,
+    );
+    // Branche side depuis C, commit E (le Commit emprunté est relâché de suite).
+    {
+        let cc = f.repo.find_commit(c).unwrap();
+        f.repo.branch("side", &cc, false).unwrap();
+    }
+    checkout_existing(&f.repo, "side");
+    let e = commit(
+        &f.repo,
+        &[("src/e.rs", "// e\n")],
+        "feat: side work",
+        1_700_000_200,
+    );
+    // Retour sur feature, commit D, puis merge de E.
+    checkout_existing(&f.repo, "feature/merge");
+    let d = commit(
+        &f.repo,
+        &[("src/d.rs", "// d\n")],
+        "feat: main line work",
+        1_700_000_300,
+    );
+    let m = merge_commit(
+        &f.repo,
+        &[d, e],
+        &[("src/d.rs", "// d\n"), ("src/e.rs", "// e\n")],
+        "merge: integrate side work",
+        1_700_000_400,
+    );
+    (f, (c, d, e, m))
+}
+
 pub fn core_with(f: &Fixture) -> (mc_core::Core, String) {
     std::env::set_var("MC_SECRETS_MODE", "memory");
     let core = mc_core::Core::in_memory(skills_dir()).unwrap();

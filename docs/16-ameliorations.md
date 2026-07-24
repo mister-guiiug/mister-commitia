@@ -6,10 +6,10 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 
 | # | Proposition | Effort | Notes |
 |---|---|---|---|
-| F1 | **Vue graphe Git réelle** (lanes SVG, merges visibles) à côté de la vue liste | M | Promise de l'étude (« vue graphe ») ; la liste ordonnée actuelle suffit pour des branches linéaires mais pas pour visualiser le contexte |
+| F1 | ✅ **Vue graphe Git réelle** (lanes SVG, merges visibles) à côté de la vue liste | M | **Livré (lot 4)** : lanes calculées par le cœur (`graph::build_graph`, pure & testée), bascule Liste/Graphe, SVG (nœuds, arêtes courbes, merges, bornes hors-segment) |
 | F2 | **Réordonnancement par glisser-déposer** dans le composeur de plan | M | L'opération `reorder` existe et est testée côté cœur mais **n'est pas exposée dans l'UI** ; idem `fixup` |
 | F3 | **Diff de contenu par commit** (viewer unifié, tronqué au-delà d'un seuil) | M | Aujourd'hui : stats seulement ; nécessite une commande IPC `commit_diff(sha)` |
-| F4 | **Push assisté post-application** : `--force-with-lease` guidé, checklist de coordination, détection des PR ouvertes via l'API | M | Backlog V2-GIT-5 ; complète le parcours P1 jusqu'au bout |
+| F4 | ✅ **Push assisté post-application** : `--force-with-lease` guidé, checklist de coordination, détection des PR ouvertes via l'API | M | **Livré (lot 4)** : `push_preview`/`push_execute` (bail explicite, garde-fous protégée+confirmation typée, audit avant/après), PR ouvertes via GitHub, panneau UI avec checklist |
 | F5 | **Import de plan dans l'UI** | S | `plan_import` existe (cœur + commande IPC) sans bouton ; le pendant de l'export |
 | F6 | **Choix de la base du segment** (autre branche/сommit que le merge-base auto) | S | Utile pour branches empilées |
 | F7 | **Nettoyage CI en masse** : exécution par lot du rapport de simulation avec throttling adaptatif, reprise sur checkpoint, puis logs/artifacts GitHub | L | Backlog V2-CI-1/4 ; le cœur gère déjà 429/Retry-After à l'unité |
@@ -60,7 +60,7 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 
 1. **Quick wins immédiats (≈ 1 semaine)** : T1 (erreurs typées — débloque U3/U4 proprement), U1, U3, U4, U5, U7, U8, U10, U11, F5, T3, T5, T12.
 2. **Structurants (≈ 1 sprint)** : F2 (reorder UI), F3 (diff), T2 (progression/annulation), U6, U9, F8, F9, F10, T4, T11.
-3. **Ambitieux / V2** : F1 (graphe), F4 (push assisté), F7 (masse CI), T6, T7 (E2E), T8 (signature), T10 (merges), U2, F11, T13.
+3. **Ambitieux / V2** : ~~F1 (graphe)~~ ✅, ~~F4 (push assisté)~~ ✅, F7 (masse CI), T6, T7 (E2E), T8 (signature), T10 (merges), U2, F11, T13.
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
 
@@ -107,3 +107,21 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > Au passage, `scripts/dev-env.ps1` corrigé : BOM UTF-8 (requis par PowerShell 5.1) et
 > PATH minimal `dlltool-only` — exposer tout le `bin` de llvm-mingw masquait le linker
 > self-contained de rustup (échec sur `-lgcc`/`-lgcc_eh`).
+
+> **Lot 4 livré le 2026-07-25** (les deux chantiers V2 « graphe + push ») : F1 — **vue graphe
+> Git** : `graph::build_graph` calcule les lanes (fonction pure, du plus récent au plus ancien),
+> ajoutée à `ScanResult` ; bascule Liste/Graphe dans l'UI, rendu SVG (nœuds, arêtes courbes
+> par lane, merges en anneau, bornes pointillées pour les parents hors segment — la base).
+> F4 — **push assisté** : `push_preview` (rafraîchit le remote-tracking, calcule avance/retard
+> et le besoin de force, détecte les PR ouvertes via GitHub, avertissements de coordination)
+> et `push_execute` (**`--force-with-lease` explicite** sur le SHA distant vu — protège le
+> travail non revu ; **refus net sur branche protégée**, **confirmation typée** du nom de
+> branche, **journal avant/après**). Panneau UI : divergence, PR ouvertes, checklist, saisie
+> de confirmation pour le push forcé.
+> Vérifié : 53 tests cœur verts (graphe linéaire = 1 lane + borne, merge interne = lanes
+> multiples ; push forcé réussi réécrivant bien le bare, **bail --force-with-lease qui abort
+> sans rien écraser quand le remote a bougé**, refus sur branche protégée, détection de PR
+> mockée) ; parcours navigateur rejoués (graphe SVG rendu, preview de push avec PR + checklist,
+> force-with-lease confirmé par saisie → succès).
+> **Reste au backlog V2** : F7 (masse CI), T7 (E2E tauri-driver), T8 (signature), T10 (merges
+> réécrivables), U2 (thème clair), F11 (i18n), T6/T13.

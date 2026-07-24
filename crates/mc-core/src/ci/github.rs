@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::error::{CoreError, Result};
-use crate::model::{CiAccount, CiRun};
+use crate::model::{CiAccount, CiRun, PrRef};
 use crate::task::TaskCtx;
 
 use super::platform_error;
@@ -121,6 +121,40 @@ impl GithubCi {
             page += 1;
         }
         Ok(out)
+    }
+
+    /// PR ouvertes dont la branche source est `branch` (head = owner:branch).
+    pub async fn list_open_prs(&self, branch: &str) -> Result<Vec<PrRef>> {
+        let url = format!("{}/repos/{}/{}/pulls", self.base, self.owner, self.repo);
+        let head = format!("{}:{}", self.owner, branch);
+        let resp = self
+            .req(reqwest::Method::GET, url)
+            .query(&[("state", "open"), ("head", head.as_str())])
+            .send()
+            .await?;
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "liste des PR GitHub",
+            ));
+        }
+        let v: Value = serde_json::from_str(&body)?;
+        Ok(v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|p| PrRef {
+                        number: p["number"].as_u64().unwrap_or(0),
+                        title: p["title"].as_str().unwrap_or("").to_string(),
+                        url: p["html_url"].as_str().unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     pub async fn delete_run(&self, run: &CiRun) -> Result<()> {

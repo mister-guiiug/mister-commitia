@@ -332,6 +332,32 @@ async fn t2_inventory_progress_per_page_and_cancel_between_pages() {
     );
 }
 
+/// F4 : détection des PR ouvertes via l'API GitHub (push assisté) ; Azure
+/// DevOps n'est pas couvert par ce chemin.
+#[tokio::test]
+async fn f4_github_list_open_prs() {
+    let server = MockServer::start();
+    server.add(
+        "GET",
+        "/repos/o/r/pulls",
+        200,
+        &[],
+        r#"[{"number":42,"title":"feat: express payment","html_url":"http://x/42"},
+            {"number":43,"title":"wip cleanup","html_url":"http://x/43"}]"#,
+    );
+    let acct = account(&server.base_url(), CiKind::Github);
+    let client = mc_core::ci::CiClient::from_account(&acct, "t-secret-pr".into()).unwrap();
+    let prs = client.list_open_prs("feature/x").await.unwrap();
+    assert_eq!(prs.len(), 2);
+    assert_eq!(prs[0].number, 42);
+    assert!(prs[0].title.contains("express"));
+    assert_eq!(prs[1].url, "http://x/43");
+
+    let az = account(&server.base_url(), CiKind::AzureDevops);
+    let azc = mc_core::ci::CiClient::from_account(&az, "t".into()).unwrap();
+    assert!(azc.list_open_prs("b").await.is_err(), "AzDO non couvert");
+}
+
 /// Inventaire Azure DevOps : keepForever/retainedByRelease ⇒ marqué retenu.
 #[tokio::test]
 async fn azdo_inventory_marks_retained_runs() {

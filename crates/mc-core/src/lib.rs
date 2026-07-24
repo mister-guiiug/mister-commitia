@@ -11,6 +11,7 @@ pub mod api;
 pub mod ci;
 pub mod error;
 pub mod gitx;
+pub mod graph;
 pub mod model;
 pub mod plan;
 pub mod secrets;
