@@ -45,7 +45,7 @@ Architecture réalisée conformément à l'[architecture cible](docs/05-architec
 | E5 Sécurité & secrets | ✅ | Coffre OS via crate `keyring` (backend mémoire pour tests/CI), scopes affichés avant enregistrement, redaction systématique des sorties |
 | E6 CI/CD | ✅ | Clients GitHub Actions & Azure DevOps Builds (pagination, continuation token, 429/Retry-After), inventaire avec leases, politique + **simulation obligatoire**, suppression unitaire à double confirmation, revérification des leases avant tout DELETE |
 | E7 Journal & audit | ✅ | Append-only SQLite, journalisation **avant** chaque suppression, export JSONL |
-| E8 Packaging | 🟡 | CI GitHub Actions (tests cœur Linux/Windows + build front + bundle Windows sur tag/dispatch). Bundle local : nécessite MSVC Build Tools ou la toolchain GNU (voir ci-dessous) |
+| E8 Packaging | ✅ | CI GitHub Actions : tests cœur Linux/Windows, compilation `mc-desktop` (MSVC) à chaque push, et sur tag/dispatch : **MSI + installeur NSIS + version portable** (zip exe+skills, sans installation ni droits admin — données déportables via `MC_DATA_DIR`, tokens toujours au coffre Windows). Signature des binaires : V2 |
 
 **Vérification** : suite de tests d'intégration sur dépôts Git synthétiques couvrant les critères CA-1 → CA-14 ([détail](docs/14-criteres-acceptation.md)) ; UI vérifiée en mode navigateur (mock IPC intégré : `npm run dev` dans `apps/desktop` sans Tauri).
 

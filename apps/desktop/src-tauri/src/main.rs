@@ -316,10 +316,15 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("répertoire de données inaccessible");
+            // MC_DATA_DIR permet un usage portable (données à côté de l'exe) ;
+            // par défaut : répertoire de données utilisateur (%APPDATA%).
+            let data_dir = match std::env::var("MC_DATA_DIR") {
+                Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
+                _ => app
+                    .path()
+                    .app_data_dir()
+                    .expect("répertoire de données inaccessible"),
+            };
             let db_path = data_dir.join("mister-commitia.sqlite");
             let skills_dir = resolve_skills_dir(app);
             let core = Core::new(&db_path, skills_dir)
