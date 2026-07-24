@@ -64,6 +64,16 @@ cd apps/desktop && npm install && npm run dev
 cd apps/desktop && npm run tauri dev
 ```
 
+### Publier une release
+
+```bash
+# la version de apps/desktop/src-tauri/tauri.conf.json doit correspondre au tag
+git tag -a v0.1.0 -m "mister-commitia 0.1.0"
+git push origin v0.1.0
+```
+
+Le workflow [Release](.github/workflows/release.yml) exécute alors : tests du cœur (gate), contrôle de cohérence tag ↔ version, bundles Windows (**MSI, installeur NSIS, zip portable**), `SHA256SUMS.txt`, puis crée la **GitHub Release** avec notes générées automatiquement.
+
 **Toolchain Windows** : les bundles officiels sont construits par la CI (windows-latest, MSVC). En local, MSVC Build Tools est la voie recommandée pour `mc-desktop`. Sans MSVC, l'hôte `x86_64-pc-windows-gnu` + une toolchain MinGW complète (ex. WinLibs) suffit pour **développer et tester `mc-core`** (validé : 30 tests) ; la compilation du binaire Tauri en gnu peut échouer selon l'environnement (build scripts volumineux — constaté sur poste durci EDR).
 
 ## Conventions de lecture
