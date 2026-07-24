@@ -72,7 +72,11 @@ impl MockServer {
     }
 }
 
-fn handle(mut stream: TcpStream, routes: Arc<Mutex<Vec<Route>>>, hits: Arc<Mutex<HashMap<String, usize>>>) {
+fn handle(
+    mut stream: TcpStream,
+    routes: Arc<Mutex<Vec<Route>>>,
+    hits: Arc<Mutex<HashMap<String, usize>>>,
+) {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     // Lire jusqu'à la fin des en-têtes.
@@ -131,7 +135,11 @@ fn handle(mut stream: TcpStream, routes: Arc<Mutex<Vec<Route>>>, hits: Arc<Mutex
 
     let (status, headers, body) = match route {
         Some(r) => (r.status, r.headers, r.body),
-        None => (404, Vec::new(), r#"{"message":"no mock route"}"#.to_string()),
+        None => (
+            404,
+            Vec::new(),
+            r#"{"message":"no mock route"}"#.to_string(),
+        ),
     };
     let reason = match status {
         200 => "OK",

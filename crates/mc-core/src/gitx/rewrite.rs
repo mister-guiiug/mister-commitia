@@ -129,14 +129,24 @@ pub fn sequencer_rebase(
     std::fs::write(&todo_src, &todo)?;
 
     let cleanup = |repo_dir: &Path, wt: &Path, scratch: &Path| {
-        let _ = run_git(repo_dir, &["worktree", "remove", "--force", &wt.to_string_lossy()], &[]);
+        let _ = run_git(
+            repo_dir,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+            &[],
+        );
         let _ = run_git(repo_dir, &["worktree", "prune"], &[]);
         let _ = std::fs::remove_dir_all(scratch);
     };
 
     run_git(
         &repo_dir,
-        &["worktree", "add", "--detach", &wt.to_string_lossy(), &tip.to_string()],
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            &wt.to_string_lossy(),
+            &tip.to_string(),
+        ],
         &[],
     )?;
 
@@ -184,7 +194,6 @@ pub fn sequencer_rebase(
         .iter()
         .cloned()
         .zip(new_oids.iter().copied())
-        .map(|(g, o)| (g, o))
         .collect();
     Ok((new_tip, mapping))
 }

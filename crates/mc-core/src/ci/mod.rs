@@ -42,7 +42,9 @@ impl CiClient {
     /// leases côté Azure DevOps immédiatement avant l'appel.
     pub async fn delete_run(&self, run: &CiRun) -> Result<()> {
         if run.running {
-            return Err(CoreError::Refused("run en cours d'exécution : suppression refusée".into()));
+            return Err(CoreError::Refused(
+                "run en cours d'exécution : suppression refusée".into(),
+            ));
         }
         if run.leased {
             return Err(CoreError::Refused(
@@ -58,7 +60,12 @@ impl CiClient {
 
 /// Interprète une réponse HTTP de plateforme en erreur exploitable :
 /// limite de débit (Retry-After / x-ratelimit-*), permission, absence.
-pub(crate) fn platform_error(status: reqwest::StatusCode, headers: &reqwest::header::HeaderMap, body: &str, what: &str) -> CoreError {
+pub(crate) fn platform_error(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    what: &str,
+) -> CoreError {
     let retry_after = headers
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
@@ -76,7 +83,9 @@ pub(crate) fn platform_error(status: reqwest::StatusCode, headers: &reqwest::hea
                 .and_then(|v| v.parse::<i64>().ok())
                 .map(|reset| (reset - Utc::now().timestamp()).max(1) as u64)
         });
-        return CoreError::RateLimited { retry_after_secs: secs.unwrap_or(60) };
+        return CoreError::RateLimited {
+            retry_after_secs: secs.unwrap_or(60),
+        };
     }
     match status.as_u16() {
         401 => CoreError::Refused(format!(
@@ -93,7 +102,11 @@ pub(crate) fn platform_error(status: reqwest::StatusCode, headers: &reqwest::hea
 pub fn scope_hash(account: &CiAccount, policy: &RetentionPolicy) -> String {
     let mut h = Sha256::new();
     h.update(account.id.as_bytes());
-    h.update(serde_json::to_string(&policy.rules).unwrap_or_default().as_bytes());
+    h.update(
+        serde_json::to_string(&policy.rules)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
     format!("{:x}", h.finalize())
 }
 
@@ -112,7 +125,10 @@ pub fn simulate(
     // Rang de fraîcheur par pipeline (0 = plus récent).
     let mut by_pipeline: std::collections::HashMap<&str, Vec<&CiRun>> = Default::default();
     for r in runs {
-        by_pipeline.entry(r.pipeline_id.as_str()).or_default().push(r);
+        by_pipeline
+            .entry(r.pipeline_id.as_str())
+            .or_default()
+            .push(r);
     }
     for list in by_pipeline.values_mut() {
         list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -126,7 +142,10 @@ pub fn simulate(
 
     for r in runs {
         if r.running {
-            protected.push(ProtectedRun { run: r.clone(), reason: "en cours d'exécution".into() });
+            protected.push(ProtectedRun {
+                run: r.clone(),
+                reason: "en cours d'exécution".into(),
+            });
             continue;
         }
         if r.leased {
@@ -146,7 +165,10 @@ pub fn simulate(
             }
         }
         if policy.rules.protect_failed && r.result.as_deref() == Some("failure") {
-            protected.push(ProtectedRun { run: r.clone(), reason: "échec conservé pour analyse".into() });
+            protected.push(ProtectedRun {
+                run: r.clone(),
+                reason: "échec conservé pour analyse".into(),
+            });
             continue;
         }
         if rank(r) < policy.rules.keep_last_per_pipeline as usize {

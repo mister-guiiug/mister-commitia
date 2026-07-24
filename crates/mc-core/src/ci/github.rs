@@ -56,7 +56,10 @@ impl GithubCi {
         if !status.is_success() {
             return Err(platform_error(status, &headers, &body, "validation GitHub"));
         }
-        Ok(format!("accès en lecture à {}/{} confirmé", self.owner, self.repo))
+        Ok(format!(
+            "accès en lecture à {}/{} confirmé",
+            self.owner, self.repo
+        ))
     }
 
     pub async fn list_runs(&self, max: usize) -> Result<Vec<CiRun>> {
@@ -72,7 +75,12 @@ impl GithubCi {
             let headers = resp.headers().clone();
             let body = resp.text().await.unwrap_or_default();
             if !status.is_success() {
-                return Err(platform_error(status, &headers, &body, "inventaire GitHub Actions"));
+                return Err(platform_error(
+                    status,
+                    &headers,
+                    &body,
+                    "inventaire GitHub Actions",
+                ));
             }
             let v: Value = serde_json::from_str(&body)?;
             let runs = v["workflow_runs"].as_array().cloned().unwrap_or_default();
@@ -123,7 +131,12 @@ impl GithubCi {
         let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(platform_error(status, &headers, &body, "suppression du run GitHub"));
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "suppression du run GitHub",
+            ));
         }
         Ok(())
     }

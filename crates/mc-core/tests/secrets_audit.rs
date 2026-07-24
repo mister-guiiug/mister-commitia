@@ -7,7 +7,10 @@ use mc_core::secrets;
 fn memory_secret_roundtrip_and_redaction() {
     std::env::set_var("MC_SECRETS_MODE", "memory");
     secrets::set_secret("test:roundtrip", "SECRETXYZ123").unwrap();
-    assert_eq!(secrets::get_secret("test:roundtrip").unwrap(), "SECRETXYZ123");
+    assert_eq!(
+        secrets::get_secret("test:roundtrip").unwrap(),
+        "SECRETXYZ123"
+    );
 
     let masked = secrets::redact("Authorization: Bearer SECRETXYZ123 fin");
     assert!(!masked.contains("SECRETXYZ123"));
@@ -48,16 +51,46 @@ fn ca14_audit_append_only_and_export() {
     }
     let events = core.audit_list(10).unwrap();
     assert_eq!(events.len(), 3);
-    assert!(events[0].seq > events[1].seq, "liste du plus récent au plus ancien");
+    assert!(
+        events[0].seq > events[1].seq,
+        "liste du plus récent au plus ancien"
+    );
 
     let export = core.audit_export().unwrap();
     let lines: Vec<&str> = export.lines().collect();
     assert_eq!(lines.len(), 3);
     let seqs: Vec<i64> = lines
         .iter()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"].as_i64().unwrap())
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["seq"]
+                .as_i64()
+                .unwrap()
+        })
         .collect();
-    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "export chronologique sans trous : {seqs:?}");
+    assert!(
+        seqs.windows(2).all(|w| w[0] < w[1]),
+        "export chronologique sans trous : {seqs:?}"
+    );
+}
+
+/// T3 : migrations versionnées — réouverture idempotente, version stable.
+#[test]
+fn store_migrations_are_versioned_and_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("t.sqlite");
+    {
+        let store = mc_core::store::Store::open(&db).unwrap();
+        assert_eq!(store.schema_version().unwrap(), 1);
+        store
+            .setting_set("k", &serde_json::json!({"v": 1}))
+            .unwrap();
+    }
+    let store = mc_core::store::Store::open(&db).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(
+        store.setting_get("k").unwrap().unwrap()["v"].as_i64(),
+        Some(1)
+    );
 }
 
 /// CA-9 : aucune clé d'API en clair dans l'export d'audit après configuration

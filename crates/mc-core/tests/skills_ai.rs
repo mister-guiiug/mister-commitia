@@ -68,8 +68,10 @@ async fn ca7_cleaner_cleans_when_allowed_and_protects_trailers() {
         1_700_000_600,
     );
     let (core, repo_id) = core_with(&f);
-    let mut gov = Governance::default();
-    gov.ai_attribution_policy = AiAttributionPolicy::NormalizationAllowed;
+    let gov = Governance {
+        ai_attribution_policy: AiAttributionPolicy::NormalizationAllowed,
+        ..Governance::default()
+    };
     core.repo_update_governance(&repo_id, gov, vec!["main".into()])
         .unwrap();
 
@@ -118,7 +120,10 @@ async fn ca7_edited_message_is_revalidated() {
     let p = &proposals[0];
     assert_eq!(p.status, ProposalStatus::Proposed, "{}", p.explanation);
     assert!(
-        p.after.as_ref().unwrap().contains("Signed-off-by: Jane Doe"),
+        p.after
+            .as_ref()
+            .unwrap()
+            .contains("Signed-off-by: Jane Doe"),
         "l'assistant conserve le trailer : {:?}",
         p.after
     );
@@ -195,7 +200,12 @@ async fn synthesis_preserves_refs_and_breaking() {
         1_700_000_610,
     );
     let b2 = commit(&f.repo, &[("src/api.rs", "// v2\n")], "wip", 1_700_000_620);
-    let b3 = commit(&f.repo, &[("src/api.rs", "// v3\n")], "fix tests", 1_700_000_630);
+    let b3 = commit(
+        &f.repo,
+        &[("src/api.rs", "// v3\n")],
+        "fix tests",
+        1_700_000_630,
+    );
     let (core, repo_id) = core_with(&f);
 
     let proposals = core
@@ -222,7 +232,11 @@ fn skill_selftests_pass_for_local_capable_skills() {
     let f = init_repo();
     commit(&f.repo, &[("a.txt", "a\n")], "chore: seed", 1_700_000_000);
     let (core, _) = core_with(&f);
-    for name in ["conventional-commits", "commit-synthesis", "ai-signature-cleaner"] {
+    for name in [
+        "conventional-commits",
+        "commit-synthesis",
+        "ai-signature-cleaner",
+    ] {
         let results = core.skill_run_tests(name).unwrap();
         assert!(!results.is_empty(), "{name} sans cas de test");
         for r in &results {

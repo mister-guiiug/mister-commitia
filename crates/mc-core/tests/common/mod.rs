@@ -54,7 +54,8 @@ pub fn commit(repo: &Repository, files: &[(&str, &str)], msg: &str, t: i64) -> O
     match parent_oid {
         Some(p) => {
             let parent = repo.find_commit(p).unwrap();
-            repo.commit(Some("HEAD"), &s, &s, msg, &tree, &[&parent]).unwrap()
+            repo.commit(Some("HEAD"), &s, &s, msg, &tree, &[&parent])
+                .unwrap()
         }
         None => repo.commit(Some("HEAD"), &s, &s, msg, &tree, &[]).unwrap(),
     }
@@ -73,7 +74,12 @@ pub fn checkout_new_branch(repo: &Repository, name: &str) {
 /// extraite de main, HEAD dessus). Retourne les 4 SHA de la feature.
 pub fn feature_fixture() -> (Fixture, Vec<Oid>) {
     let f = init_repo();
-    commit(&f.repo, &[("README.md", "# app\n")], "chore: init", 1_700_000_000);
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n")],
+        "chore: init",
+        1_700_000_000,
+    );
     commit(
         &f.repo,
         &[("src/main.rs", "fn main() {}\n")],
@@ -111,9 +117,7 @@ pub fn feature_fixture() -> (Fixture, Vec<Oid>) {
 pub fn core_with(f: &Fixture) -> (mc_core::Core, String) {
     std::env::set_var("MC_SECRETS_MODE", "memory");
     let core = mc_core::Core::in_memory(skills_dir()).unwrap();
-    let repo = core
-        .repo_declare(f.dir.path().to_str().unwrap())
-        .unwrap();
+    let repo = core.repo_declare(f.dir.path().to_str().unwrap()).unwrap();
     (core, repo.id)
 }
 
@@ -130,7 +134,9 @@ pub fn add_remote_and_push(f: &Fixture, branch: &str) -> tempfile::TempDir {
         .unwrap();
     remote
         .fetch(
-            &[&format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")],
+            &[&format!(
+                "+refs/heads/{branch}:refs/remotes/origin/{branch}"
+            )],
             None,
             None,
         )

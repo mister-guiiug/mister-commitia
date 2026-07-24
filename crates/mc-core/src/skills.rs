@@ -112,9 +112,12 @@ impl Skill {
     }
 }
 
+/// Skills chargées + erreurs de chargement (nom du dossier, motif).
+pub type SkillLoadResult = (Vec<Skill>, Vec<(String, String)>);
+
 /// Charge toutes les skills d'un dossier (un sous-dossier = une skill avec
 /// `skill.yaml`). Les skills invalides sont ignorées avec leur motif.
-pub fn load_dir(dir: &Path) -> Result<(Vec<Skill>, Vec<(String, String)>)> {
+pub fn load_dir(dir: &Path) -> Result<SkillLoadResult> {
     let mut skills = Vec::new();
     let mut errors = Vec::new();
     if !dir.exists() {
@@ -131,7 +134,10 @@ pub fn load_dir(dir: &Path) -> Result<(Vec<Skill>, Vec<(String, String)>)> {
         }
         match load_one(&entry.path(), &manifest) {
             Ok(s) => skills.push(s),
-            Err(e) => errors.push((entry.file_name().to_string_lossy().to_string(), e.to_string())),
+            Err(e) => errors.push((
+                entry.file_name().to_string_lossy().to_string(),
+                e.to_string(),
+            )),
         }
     }
     skills.sort_by(|a, b| a.def.name.cmp(&b.def.name));
@@ -179,7 +185,9 @@ pub enum GenOutcome {
         risk: Risk,
         removed: Vec<String>,
     },
-    Refusal { explanation: String },
+    Refusal {
+        explanation: String,
+    },
 }
 
 pub fn validate_outcome(
@@ -260,8 +268,7 @@ pub fn validate_outcome(
                     } else {
                         &skill.def.detection_patterns
                     };
-                    let before_lines: Vec<&str> =
-                        before.lines().map(str::trim_end).collect();
+                    let before_lines: Vec<&str> = before.lines().map(str::trim_end).collect();
                     for line in message.lines().map(str::trim_end) {
                         if !line.is_empty() && !before_lines.contains(&line) {
                             return Err(CoreError::Refused(format!(
@@ -269,14 +276,12 @@ pub fn validate_outcome(
                             )));
                         }
                     }
-                    let after_lines: Vec<&str> =
-                        message.lines().map(str::trim_end).collect();
+                    let after_lines: Vec<&str> = message.lines().map(str::trim_end).collect();
                     for line in &before_lines {
                         if !line.is_empty() && !after_lines.contains(line) {
                             let lower = line.to_lowercase();
-                            let matched = patterns
-                                .iter()
-                                .any(|p| lower.contains(&p.to_lowercase()));
+                            let matched =
+                                patterns.iter().any(|p| lower.contains(&p.to_lowercase()));
                             if !matched {
                                 return Err(CoreError::Refused(format!(
                                     "garde-fou : ligne retirée sans motif détecté (« {line} »)"
@@ -288,10 +293,16 @@ pub fn validate_outcome(
             }
             // Garde-fous structurels, appliqués par le flux (jamais d'auto-apply,
             // rapports sans action…) ou par le plan-engine : rien à vérifier ici.
-            "no_auto_apply" | "report_only" | "removed_content_journaled"
-            | "leased_runs_always_protected" | "can_require_enhanced_confirmation"
-            | "can_block" | "blocking_when" | "groups_within_segment"
-            | "no_merge_commits_in_groups" | "shared_commits_flagged_high" => {}
+            "no_auto_apply"
+            | "report_only"
+            | "removed_content_journaled"
+            | "leased_runs_always_protected"
+            | "can_require_enhanced_confirmation"
+            | "can_block"
+            | "blocking_when"
+            | "groups_within_segment"
+            | "no_merge_commits_in_groups"
+            | "shared_commits_flagged_high" => {}
             _ => {}
         }
     }

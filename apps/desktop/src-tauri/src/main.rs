@@ -7,10 +7,24 @@ use mc_core::model::*;
 use mc_core::Core;
 use tauri::Manager;
 
-type CmdResult<T> = std::result::Result<T, String>;
+/// Contrat d'erreur UI ↔ cœur : `code` est stable (l'UI s'y branche),
+/// `message` est le libellé humain, `expected` porte la valeur attendue
+/// des confirmations renforcées.
+#[derive(serde::Serialize)]
+struct CmdError {
+    code: &'static str,
+    message: String,
+    expected: Option<String>,
+}
 
-fn err(e: mc_core::CoreError) -> String {
-    e.to_string()
+type CmdResult<T> = std::result::Result<T, CmdError>;
+
+fn err(e: mc_core::CoreError) -> CmdError {
+    CmdError {
+        code: e.code(),
+        expected: e.expected().map(String::from),
+        message: e.to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +81,11 @@ fn plan_new(core: tauri::State<'_, Core>, repo_id: String, branch: String) -> Cm
 }
 
 #[tauri::command]
-fn plan_set_ops(core: tauri::State<'_, Core>, plan_id: String, ops: Vec<PlanOp>) -> CmdResult<Plan> {
+fn plan_set_ops(
+    core: tauri::State<'_, Core>,
+    plan_id: String,
+    ops: Vec<PlanOp>,
+) -> CmdResult<Plan> {
     core.plan_set_ops(&plan_id, ops).map_err(err)
 }
 
@@ -264,7 +282,9 @@ async fn ci_simulate(
     policy_id: String,
     max: usize,
 ) -> CmdResult<SimulationReport> {
-    core.ci_simulate(&account_id, &policy_id, max).await.map_err(err)
+    core.ci_simulate(&account_id, &policy_id, max)
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]

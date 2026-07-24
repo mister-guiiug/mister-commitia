@@ -23,13 +23,14 @@ pub fn generate(ctx: &SkillContext<'_>) -> Result<GenOutcome> {
 
 fn infer_type(c: &CommitInfo, types: &[String]) -> String {
     let hay = format!("{} {}", c.subject, c.body).to_lowercase();
-    let pick = |t: &str| -> Option<String> {
-        types.iter().find(|x| x.as_str() == t).cloned()
-    };
+    let pick = |t: &str| -> Option<String> { types.iter().find(|x| x.as_str() == t).cloned() };
     // Les fichiers touchés priment sur les mots-clés du message.
     if !c.files.is_empty() {
         let lower: Vec<String> = c.files.iter().map(|f| f.to_lowercase()).collect();
-        if lower.iter().all(|f| f.ends_with(".md") || f.starts_with("docs/")) {
+        if lower
+            .iter()
+            .all(|f| f.ends_with(".md") || f.starts_with("docs/"))
+        {
             if let Some(t) = pick("docs") {
                 return t;
             }
@@ -42,20 +43,46 @@ fn infer_type(c: &CommitInfo, types: &[String]) -> String {
                 return t;
             }
         }
-        if lower.iter().all(|f| f.contains("test") || f.contains("spec")) {
+        if lower
+            .iter()
+            .all(|f| f.contains("test") || f.contains("spec"))
+        {
             if let Some(t) = pick("test") {
                 return t;
             }
         }
     }
     let candidates: [(&str, &[&str]); 7] = [
-        ("fix", &["fix", "bug", "corrig", "répar", "repar", "hotfix", "crash"]),
+        (
+            "fix",
+            &["fix", "bug", "corrig", "répar", "repar", "hotfix", "crash"],
+        ),
         ("docs", &["doc", "readme", "documentation"]),
         ("test", &["test", "spec", "coverage"]),
         ("ci", &["ci", "workflow", "pipeline", "action", "deploy"]),
         ("perf", &["perf", "optim", "speed", "lent"]),
-        ("refactor", &["refactor", "rename", "renomm", "clean", "nettoy", "restructur"]),
-        ("build", &["build", "dependenc", "dépendanc", "bump", "upgrade", "package"]),
+        (
+            "refactor",
+            &[
+                "refactor",
+                "rename",
+                "renomm",
+                "clean",
+                "nettoy",
+                "restructur",
+            ],
+        ),
+        (
+            "build",
+            &[
+                "build",
+                "dependenc",
+                "dépendanc",
+                "bump",
+                "upgrade",
+                "package",
+            ],
+        ),
     ];
     for (t, keys) in candidates {
         if keys.iter().any(|k| hay.contains(k)) {
@@ -141,7 +168,9 @@ fn conventional(ctx: &SkillContext<'_>) -> Result<GenOutcome> {
 
 fn synthesis(ctx: &SkillContext<'_>) -> Result<GenOutcome> {
     if ctx.commits.len() < 2 {
-        return Err(CoreError::Invalid("la synthèse requiert plusieurs commits".into()));
+        return Err(CoreError::Invalid(
+            "la synthèse requiert plusieurs commits".into(),
+        ));
     }
     let types = &ctx.governance.convention_types;
 
@@ -258,9 +287,9 @@ fn cleaner(ctx: &SkillContext<'_>) -> Result<GenOutcome> {
     let mut lines_out: Vec<String> = Vec::new();
     for line in before.lines() {
         let lower = line.to_lowercase();
-        let is_protected = protected.iter().any(|t| {
-            lower.starts_with(&format!("{}:", t.to_lowercase()))
-        });
+        let is_protected = protected
+            .iter()
+            .any(|t| lower.starts_with(&format!("{}:", t.to_lowercase())));
         let matched = !is_protected && patterns.iter().any(|p| lower.contains(&p.to_lowercase()));
         if matched {
             removed.push(line.to_string());

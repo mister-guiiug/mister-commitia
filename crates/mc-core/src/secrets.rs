@@ -55,7 +55,10 @@ pub fn set_secret(reference: &str, value: &str) -> Result<()> {
         return Err(CoreError::Invalid("secret vide".into()));
     }
     if memory_mode() {
-        MEMORY.lock().unwrap().insert(reference.to_string(), value.to_string());
+        MEMORY
+            .lock()
+            .unwrap()
+            .insert(reference.to_string(), value.to_string());
     } else {
         entry(reference)?
             .set_password(value)

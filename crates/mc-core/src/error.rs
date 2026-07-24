@@ -21,6 +21,42 @@ pub enum CoreError {
     Secret(String),
     #[error("limite de débit atteinte, réessayer dans {retry_after_secs}s")]
     RateLimited { retry_after_secs: u64 },
+    /// L'action exige un consentement explicite de l'utilisateur (ex. envoi
+    /// de contexte à un fournisseur IA distant). L'UI ouvre le dialogue dédié.
+    #[error("consentement requis : {0}")]
+    ConsentRequired(String),
+    /// L'action exige une confirmation renforcée (saisie du nom exact de la
+    /// cible). `expected` est la valeur attendue, à afficher par l'UI.
+    #[error("confirmation requise : {message}")]
+    ConfirmRequired { expected: String, message: String },
+}
+
+impl CoreError {
+    /// Code stable consommé par les interfaces — le libellé peut changer,
+    /// jamais le code (contrat UI ↔ cœur).
+    pub fn code(&self) -> &'static str {
+        match self {
+            CoreError::Git(_) => "git",
+            CoreError::Db(_) => "db",
+            CoreError::Http(_) => "http",
+            CoreError::Refused(_) => "refused",
+            CoreError::Invalid(_) => "invalid",
+            CoreError::NotFound(_) => "not_found",
+            CoreError::Io(_) => "io",
+            CoreError::Secret(_) => "secret",
+            CoreError::RateLimited { .. } => "rate_limited",
+            CoreError::ConsentRequired(_) => "consent_required",
+            CoreError::ConfirmRequired { .. } => "confirm_required",
+        }
+    }
+
+    /// Valeur attendue pour une confirmation renforcée, le cas échéant.
+    pub fn expected(&self) -> Option<&str> {
+        match self {
+            CoreError::ConfirmRequired { expected, .. } => Some(expected),
+            _ => None,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

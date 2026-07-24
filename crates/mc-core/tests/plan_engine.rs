@@ -24,10 +24,7 @@ fn ca3_ca4_dry_run_reword_preserves_trees_and_branch() {
         )
         .unwrap();
 
-    let tip_before = f
-        .repo
-        .refname_to_id("refs/heads/feature/checkout")
-        .unwrap();
+    let tip_before = f.repo.refname_to_id("refs/heads/feature/checkout").unwrap();
     let plan = core.plan_dry_run(&plan.id).unwrap();
 
     // Branche et worktree intacts (CA-3).
@@ -42,7 +39,10 @@ fn ca3_ca4_dry_run_reword_preserves_trees_and_branch() {
         .repo
         .refname_to_id(plan.preview_ref.as_ref().unwrap())
         .unwrap();
-    assert_ne!(preview, tip_before, "les messages ont changé, les SHA aussi");
+    assert_ne!(
+        preview, tip_before,
+        "les messages ont changé, les SHA aussi"
+    );
     assert_eq!(
         f.repo.find_commit(preview).unwrap().tree_id(),
         f.repo.find_commit(tip_before).unwrap().tree_id()
@@ -134,10 +134,7 @@ fn ca1_ca8_apply_backup_then_rollback() {
             )],
         )
         .unwrap();
-    let old_tip = f
-        .repo
-        .refname_to_id("refs/heads/feature/checkout")
-        .unwrap();
+    let old_tip = f.repo.refname_to_id("refs/heads/feature/checkout").unwrap();
     let plan = core.plan_dry_run(&plan.id).unwrap();
     let preview = f
         .repo
@@ -151,7 +148,9 @@ fn ca1_ca8_apply_backup_then_rollback() {
     let backup = plan.backup_ref.as_ref().unwrap();
     assert_eq!(f.repo.refname_to_id(backup).unwrap(), old_tip);
     assert_eq!(
-        f.repo.refname_to_id(plan.backup_tag.as_ref().unwrap()).unwrap(),
+        f.repo
+            .refname_to_id(plan.backup_tag.as_ref().unwrap())
+            .unwrap(),
         old_tip
     );
     // La branche pointe le résultat du dry-run.
@@ -198,7 +197,10 @@ fn ca8_rollback_guided_when_branch_moved() {
     );
     let err = core.plan_rollback(&plan.id).unwrap_err().to_string();
     assert!(err.contains("avancé"), "{err}");
-    assert!(err.contains("refs/mc/backup/"), "la procédure guidée cite le backup : {err}");
+    assert!(
+        err.contains("refs/mc/backup/"),
+        "la procédure guidée cite le backup : {err}"
+    );
 }
 
 /// CA-5 : un plan est refusé si le dépôt a bougé depuis son empreinte.
@@ -257,7 +259,10 @@ fn ca6_protected_branch_blocked() {
     let (f, _) = feature_fixture();
     let (core, repo_id) = core_with(&f);
     let err = core.plan_new(&repo_id, "main").unwrap_err().to_string();
-    assert!(err.contains("protégée") || err.contains("réécrivable"), "{err}");
+    assert!(
+        err.contains("protégée") || err.contains("réécrivable"),
+        "{err}"
+    );
 }
 
 /// CA-6 : branche partagée (présente sur un remote) → confirmation renforcée
@@ -383,10 +388,7 @@ fn applied_plan_is_immutable() {
         .unwrap();
     core.plan_dry_run(&plan.id).unwrap();
     core.plan_apply(&plan.id, None).unwrap();
-    let err = core
-        .plan_set_ops(&plan.id, vec![])
-        .unwrap_err()
-        .to_string();
+    let err = core.plan_set_ops(&plan.id, vec![]).unwrap_err().to_string();
     assert!(err.contains("immuable"), "{err}");
 }
 

@@ -27,14 +27,28 @@ impl SkillContext<'_> {
 #[derive(Debug, Clone)]
 pub enum Provider {
     RuleBased,
-    Ollama { base_url: String, model: String },
-    OpenAiCompat { base_url: String, model: String, api_key: String },
-    Anthropic { base_url: String, model: String, api_key: String },
+    Ollama {
+        base_url: String,
+        model: String,
+    },
+    OpenAiCompat {
+        base_url: String,
+        model: String,
+        api_key: String,
+    },
+    Anthropic {
+        base_url: String,
+        model: String,
+        api_key: String,
+    },
 }
 
 impl Provider {
     pub fn is_remote(&self) -> bool {
-        matches!(self, Provider::OpenAiCompat { .. } | Provider::Anthropic { .. })
+        matches!(
+            self,
+            Provider::OpenAiCompat { .. } | Provider::Anthropic { .. }
+        )
     }
 
     pub async fn complete(&self, system: &str, user: &str) -> Result<String> {
@@ -64,9 +78,16 @@ impl Provider {
                 if !status.is_success() {
                     return Err(CoreError::Http(format!("ollama {status} : {v}")));
                 }
-                Ok(v["message"]["content"].as_str().unwrap_or_default().to_string())
+                Ok(v["message"]["content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string())
             }
-            Provider::OpenAiCompat { base_url, model, api_key } => {
+            Provider::OpenAiCompat {
+                base_url,
+                model,
+                api_key,
+            } => {
                 let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
                 let resp = client
                     .post(url)
@@ -90,7 +111,11 @@ impl Provider {
                     .unwrap_or_default()
                     .to_string())
             }
-            Provider::Anthropic { base_url, model, api_key } => {
+            Provider::Anthropic {
+                base_url,
+                model,
+                api_key,
+            } => {
                 let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
                 let resp = client
                     .post(url)
@@ -109,7 +134,10 @@ impl Provider {
                 if !status.is_success() {
                     return Err(CoreError::Http(format!("anthropic {status} : {v}")));
                 }
-                Ok(v["content"][0]["text"].as_str().unwrap_or_default().to_string())
+                Ok(v["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string())
             }
         }
     }
@@ -142,7 +170,12 @@ pub fn build_prompts(ctx: &SkillContext<'_>) -> (String, String) {
     let diffstat = ctx
         .commits
         .iter()
-        .map(|c| format!("{} : {} fichiers, +{} -{}", c.short, c.files_changed, c.insertions, c.deletions))
+        .map(|c| {
+            format!(
+                "{} : {} fichiers, +{} -{}",
+                c.short, c.files_changed, c.insertions, c.deletions
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let patterns = if ctx.skill.def.detection_patterns.is_empty() {
@@ -155,7 +188,10 @@ pub fn build_prompts(ctx: &SkillContext<'_>) -> (String, String) {
         AiAttributionPolicy::NormalizationAllowed => "normalization-allowed",
     };
     let vars: Vec<(&str, String)> = vec![
-        ("subject", first.map(|c| c.subject.clone()).unwrap_or_default()),
+        (
+            "subject",
+            first.map(|c| c.subject.clone()).unwrap_or_default(),
+        ),
         ("body", first.map(|c| c.body.clone()).unwrap_or_default()),
         ("messages", messages),
         ("count", ctx.commits.len().to_string()),
@@ -164,12 +200,18 @@ pub fn build_prompts(ctx: &SkillContext<'_>) -> (String, String) {
         ("convention", ctx.governance.convention_types.join(", ")),
         ("patterns", patterns.join(" | ")),
         ("ai_attribution_policy", policy.to_string()),
-        ("protected_trailers", ctx.governance.protected_trailers.join(", ")),
+        (
+            "protected_trailers",
+            ctx.governance.protected_trailers.join(", "),
+        ),
         ("normalized_trailer", String::new()),
         ("merge_base", String::new()),
         ("commits", String::new()),
     ];
-    (SYSTEM_PROMPT.to_string(), template(&ctx.skill.prompt, &vars))
+    (
+        SYSTEM_PROMPT.to_string(),
+        template(&ctx.skill.prompt, &vars),
+    )
 }
 
 /// Aperçu exact de ce qui serait transmis à un fournisseur — affiché pour le

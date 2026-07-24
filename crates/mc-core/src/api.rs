@@ -54,6 +54,9 @@ pub struct SkillTestResult {
     pub detail: String,
 }
 
+/// Métadonnées de skills + erreurs de chargement (nom, motif).
+pub type SkillsListing = (Vec<SkillMeta>, Vec<(String, String)>);
+
 impl Core {
     pub fn new(db_path: &Path, skills_dir: PathBuf) -> Result<Self> {
         Ok(Self {
@@ -73,13 +76,25 @@ impl Core {
         })
     }
 
-    fn audit(&self, category: &str, action: &str, target: &str, params: serde_json::Value, result: &str) {
+    fn audit(
+        &self,
+        category: &str,
+        action: &str,
+        target: &str,
+        params: serde_json::Value,
+        result: &str,
+    ) {
         let redacted: serde_json::Value =
             serde_json::from_str(&secrets::redact(&params.to_string()))
                 .unwrap_or(serde_json::Value::Null);
-        let _ = self
-            .store
-            .audit_append(&self.actor, category, action, target, &redacted, &secrets::redact(result));
+        let _ = self.store.audit_append(
+            &self.actor,
+            category,
+            action,
+            target,
+            &redacted,
+            &secrets::redact(result),
+        );
     }
 
     // -- E1 : dépôts ---------------------------------------------------------
@@ -107,7 +122,13 @@ impl Core {
             last_scanned_at: None,
         };
         self.store.repo_add(&r)?;
-        self.audit("config", "repo_declare", &r.name, json!({"path": path}), "ok");
+        self.audit(
+            "config",
+            "repo_declare",
+            &r.name,
+            json!({"path": path}),
+            "ok",
+        );
         Ok(r)
     }
 
@@ -156,12 +177,21 @@ impl Core {
             (Some(d), b) if d != b => {
                 let dt = GitEngine::branch_tip(&repo, d)?;
                 let mb = GitEngine::merge_base(&repo, tip, dt)?;
-                if mb == tip { None } else { Some(mb) }
+                if mb == tip {
+                    None
+                } else {
+                    Some(mb)
+                }
             }
             _ => None,
         };
         let commits = GitEngine::segment_infos(&repo, base, tip, 500)?;
-        let report = analyzer::analyze_commits(&r, &branch, base.map(|o| o.to_string()).as_deref(), &commits);
+        let report = analyzer::analyze_commits(
+            &r,
+            &branch,
+            base.map(|o| o.to_string()).as_deref(),
+            &commits,
+        );
         let squash_suggestions = analyzer::suggest_squash_groups(&commits);
         r.last_scanned_at = Some(now_iso());
         self.store.repo_update(&r)?;
@@ -310,11 +340,11 @@ impl Core {
 
     // -- E4 : skills & IA ----------------------------------------------------
 
-    pub fn skills_load(&self) -> Result<(Vec<Skill>, Vec<(String, String)>)> {
+    pub fn skills_load(&self) -> Result<skills::SkillLoadResult> {
         skills::load_dir(&self.skills_dir)
     }
 
-    pub fn skills_list(&self) -> Result<(Vec<SkillMeta>, Vec<(String, String)>)> {
+    pub fn skills_list(&self) -> Result<SkillsListing> {
         let (loaded, errors) = self.skills_load()?;
         let metas = loaded
             .iter()
@@ -324,9 +354,19 @@ impl Core {
                 owner: s.def.owner.clone(),
                 status: s.def.status.clone(),
                 description: s.def.description.trim().to_string(),
-                output: s.def.output.as_ref().map(|o| o.kind.clone()).unwrap_or_default(),
+                output: s
+                    .def
+                    .output
+                    .as_ref()
+                    .map(|o| o.kind.clone())
+                    .unwrap_or_default(),
                 guardrails: s.def.guardrails.iter().map(|g| g.assert.clone()).collect(),
-                rules: s.def.rules.iter().map(|r| r.text.trim().to_string()).collect(),
+                rules: s
+                    .def
+                    .rules
+                    .iter()
+                    .map(|r| r.text.trim().to_string())
+                    .collect(),
                 tests: s.test_cases.len(),
                 local_capable: matches!(
                     s.def.name.as_str(),
@@ -366,21 +406,21 @@ impl Core {
                     None => String::new(),
                 },
             },
-            AiProviderKind::Anthropic => Provider::Anthropic {
-                base_url: cfg
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.anthropic.com".into()),
-                model: cfg
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "claude-sonnet-5".into()),
-                api_key: secrets::get_secret(
-                    cfg.key_ref
-                        .as_deref()
-                        .ok_or_else(|| CoreError::Invalid("clé d'API absente du coffre".into()))?,
-                )?,
-            },
+            AiProviderKind::Anthropic => {
+                Provider::Anthropic {
+                    base_url: cfg
+                        .base_url
+                        .clone()
+                        .unwrap_or_else(|| "https://api.anthropic.com".into()),
+                    model: cfg
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "claude-sonnet-5".into()),
+                    api_key: secrets::get_secret(cfg.key_ref.as_deref().ok_or_else(|| {
+                        CoreError::Invalid("clé d'API absente du coffre".into())
+                    })?)?,
+                }
+            }
         })
     }
 
@@ -435,8 +475,8 @@ impl Core {
         let skill = self.skill_by_name(skill_name)?;
         let (provider, provider_label) = self.resolve_provider(provider_id.as_deref())?;
         if provider.is_remote() && !consent_remote {
-            return Err(CoreError::Refused(
-                "envoi à un fournisseur distant : consentement explicite requis (aperçu des données à l'appui)".into(),
+            return Err(CoreError::ConsentRequired(
+                "envoi à un fournisseur IA distant : accord explicite requis, aperçu des données à l'appui".into(),
             ));
         }
         let mut out = Vec::new();
@@ -465,12 +505,25 @@ impl Core {
                 Err(e) => return Err(e),
             };
             let (after, explanation, risk, status, removed) = match outcome {
-                GenOutcome::Proposal { message, explanation, risk, removed } => {
-                    (Some(message), explanation, risk, ProposalStatus::Proposed, removed)
-                }
-                GenOutcome::Refusal { explanation } => {
-                    (None, explanation, skill.risk_default(), ProposalStatus::Refused, Vec::new())
-                }
+                GenOutcome::Proposal {
+                    message,
+                    explanation,
+                    risk,
+                    removed,
+                } => (
+                    Some(message),
+                    explanation,
+                    risk,
+                    ProposalStatus::Proposed,
+                    removed,
+                ),
+                GenOutcome::Refusal { explanation } => (
+                    None,
+                    explanation,
+                    skill.risk_default(),
+                    ProposalStatus::Refused,
+                    Vec::new(),
+                ),
             };
             let p = Proposal {
                 id: new_id("prp"),
@@ -529,7 +582,9 @@ impl Core {
         match decision {
             "accept" => {
                 if p.after.is_none() {
-                    return Err(CoreError::Refused("rien à accepter : la skill a refusé".into()));
+                    return Err(CoreError::Refused(
+                        "rien à accepter : la skill a refusé".into(),
+                    ));
                 }
                 p.status = ProposalStatus::Accepted;
                 p.decision = p.after.clone();
@@ -615,7 +670,13 @@ impl Core {
             }
         }
         self.store.ai_provider_save(&cfg)?;
-        self.audit("secret", "ai_provider_save", &format!("{:?}", cfg.kind), json!({"id": cfg.id}), "ok");
+        self.audit(
+            "secret",
+            "ai_provider_save",
+            &format!("{:?}", cfg.kind),
+            json!({"id": cfg.id}),
+            "ok",
+        );
         Ok(cfg)
     }
 
@@ -624,7 +685,12 @@ impl Core {
     }
 
     pub fn ai_provider_remove(&self, id: &str) -> Result<()> {
-        if let Some(cfg) = self.store.ai_provider_list()?.into_iter().find(|c| c.id == id) {
+        if let Some(cfg) = self
+            .store
+            .ai_provider_list()?
+            .into_iter()
+            .find(|c| c.id == id)
+        {
             if let Some(r) = &cfg.key_ref {
                 secrets::delete_secret(r)?;
             }
@@ -636,6 +702,8 @@ impl Core {
 
     // -- E6 : CI/CD ----------------------------------------------------------
 
+    // Signature dictée par le formulaire IPC : chaque champ est distinct.
+    #[allow(clippy::too_many_arguments)]
     pub async fn ci_account_add(
         &self,
         kind: CiKind,
@@ -761,20 +829,25 @@ impl Core {
         let (account, client) = self.client_for(account_id)?;
         let policy = self.store.policy_get(policy_id)?;
         let scope = ci::scope_hash(&account, &policy);
-        let sim = self
-            .store
-            .last_simulation(&scope)?
-            .ok_or_else(|| CoreError::Refused("aucune simulation préalable pour ce périmètre : exécuter la simulation d'abord".into()))?;
+        let sim = self.store.last_simulation(&scope)?.ok_or_else(|| {
+            CoreError::Refused(
+                "aucune simulation préalable pour ce périmètre : exécuter la simulation d'abord"
+                    .into(),
+            )
+        })?;
         if !sim.candidates.iter().any(|c| c.run_id == run.run_id) {
             return Err(CoreError::Refused(
                 "ce run n'est pas dans les candidats du rapport de simulation".into(),
             ));
         }
         if confirm != run.pipeline_name {
-            return Err(CoreError::Refused(format!(
-                "confirmation invalide : saisir exactement « {} »",
-                run.pipeline_name
-            )));
+            return Err(CoreError::ConfirmRequired {
+                expected: run.pipeline_name.clone(),
+                message: format!(
+                    "confirmation invalide : saisir exactement « {} »",
+                    run.pipeline_name
+                ),
+            });
         }
         // Journalisation AVANT l'appel de suppression (CA-11).
         self.audit(
@@ -870,12 +943,25 @@ fn run_skill_case(skill: &Skill, case: &skills::SkillTestCase) -> SkillTestResul
                     other => serde_yaml::to_string(other).unwrap_or_default(),
                 };
                 let (subject, body) = full.split_once('\n').unwrap_or((full.as_str(), ""));
-                mk_commit(subject.trim().to_string(), body.trim().to_string(), Vec::new())
+                mk_commit(
+                    subject.trim().to_string(),
+                    body.trim().to_string(),
+                    Vec::new(),
+                )
             })
             .collect()
     } else {
-        let subject = g.get("subject").and_then(Y::as_str).unwrap_or("").to_string();
-        let body = g.get("body").and_then(Y::as_str).unwrap_or("").trim().to_string();
+        let subject = g
+            .get("subject")
+            .and_then(Y::as_str)
+            .unwrap_or("")
+            .to_string();
+        let body = g
+            .get("body")
+            .and_then(Y::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         vec![mk_commit(subject, body, given_files)]
     };
 

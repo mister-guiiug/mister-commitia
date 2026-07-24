@@ -52,7 +52,7 @@ fn idx_of(groups: &[GroupState], oid: Oid) -> Result<usize> {
 /// Fusionne `targets` (leaders contigus) dans le premier ; `with_message`
 /// impose le message final (Squash), sinon le message du premier est conservé (Fixup).
 fn fold(
-    groups: &mut Vec<GroupState>,
+    groups: &mut [GroupState],
     segment: &[Oid],
     targets: &[String],
     with_message: Option<String>,
@@ -70,7 +70,9 @@ fn fold(
     sorted.sort_unstable();
     sorted.dedup();
     if sorted.len() != targets.len() {
-        return Err(CoreError::Invalid("doublon dans les cibles de fusion".into()));
+        return Err(CoreError::Invalid(
+            "doublon dans les cibles de fusion".into(),
+        ));
     }
     let alive: Vec<usize> = groups
         .iter()
@@ -139,7 +141,10 @@ fn compile(segment: &[Oid], ops: &[PlanOp]) -> Result<Compiled> {
 
     for pop in sorted_ops {
         match &pop.op {
-            Operation::Reword { target, new_message } => {
+            Operation::Reword {
+                target,
+                new_message,
+            } => {
                 let oid = resolve(segment, target)?;
                 let i = idx_of(&groups, oid)?;
                 if new_message.trim().is_empty() {
@@ -147,7 +152,10 @@ fn compile(segment: &[Oid], ops: &[PlanOp]) -> Result<Compiled> {
                 }
                 groups[i].message = Some(new_message.clone());
             }
-            Operation::Squash { targets, new_message } => {
+            Operation::Squash {
+                targets,
+                new_message,
+            } => {
                 fold(&mut groups, segment, targets, Some(new_message.clone()))?;
                 structure_changed = true;
             }
@@ -194,10 +202,8 @@ fn compile(segment: &[Oid], ops: &[PlanOp]) -> Result<Compiled> {
                 if !wanted.iter().all(|o| seen.insert(*o)) {
                     return Err(CoreError::Invalid("réordonnancement : doublon".into()));
                 }
-                let mut by_leader: HashMap<Oid, GroupState> = groups
-                    .drain(..)
-                    .map(|g| (g.leader, g))
-                    .collect();
+                let mut by_leader: HashMap<Oid, GroupState> =
+                    groups.drain(..).map(|g| (g.leader, g)).collect();
                 let mut rebuilt = Vec::new();
                 for oid in &wanted {
                     rebuilt.push(by_leader.remove(oid).unwrap());
@@ -307,8 +313,8 @@ impl PlanEngine {
                 &tip.to_string()[..8]
             )));
         }
-        let base = Oid::from_str(&plan.fingerprint.base)
-            .map_err(|e| CoreError::Invalid(e.to_string()))?;
+        let base =
+            Oid::from_str(&plan.fingerprint.base).map_err(|e| CoreError::Invalid(e.to_string()))?;
         Ok((base, tip))
     }
 
@@ -429,10 +435,13 @@ impl PlanEngine {
         let segment = GitEngine::segment(repo, Some(base), tip)?;
         let shared = segment.iter().any(|o| remote_set.contains(o));
         if shared && confirm != Some(plan.fingerprint.branch.as_str()) {
-            return Err(CoreError::Refused(format!(
-                "branche partagée : saisir exactement « {} » pour confirmer la réécriture",
-                plan.fingerprint.branch
-            )));
+            return Err(CoreError::ConfirmRequired {
+                expected: plan.fingerprint.branch.clone(),
+                message: format!(
+                    "branche partagée : saisir exactement « {} » pour confirmer la réécriture",
+                    plan.fingerprint.branch
+                ),
+            });
         }
 
         let branch = plan.fingerprint.branch.clone();
@@ -451,7 +460,9 @@ impl PlanEngine {
         repo.reference(&backup_ref, tip, false, "mister-commitia backup")?;
         repo.reference(&backup_tag, tip, false, "mister-commitia backup tag")?;
         if repo.find_reference(&backup_ref)?.target() != Some(tip) {
-            return Err(CoreError::Git("échec de création du backup : application annulée".into()));
+            return Err(CoreError::Git(
+                "échec de création du backup : application annulée".into(),
+            ));
         }
 
         if checked_out {
@@ -479,7 +490,9 @@ impl PlanEngine {
     pub fn rollback(repo_ref: &RepoRef, repo: &Repository, plan: &mut Plan) -> Result<()> {
         let _ = repo_ref;
         if plan.status != PlanStatus::Applied {
-            return Err(CoreError::Refused("seul un plan appliqué se restaure".into()));
+            return Err(CoreError::Refused(
+                "seul un plan appliqué se restaure".into(),
+            ));
         }
         let branch = plan.fingerprint.branch.clone();
         let tip = GitEngine::branch_tip(repo, &branch)?;

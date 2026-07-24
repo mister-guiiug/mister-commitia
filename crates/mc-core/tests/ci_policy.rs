@@ -11,7 +11,11 @@ fn run(id: &str, pipeline: &str, days_ago: i64, leased: bool, running: bool) -> 
         pipeline_name: format!("Pipeline {pipeline}"),
         run_id: id.into(),
         status: if running { "in_progress" } else { "completed" }.into(),
-        result: if running { None } else { Some("success".into()) },
+        result: if running {
+            None
+        } else {
+            Some("success".into())
+        },
         branch: Some("develop".into()),
         created_at: (Utc::now() - Duration::days(days_ago)).to_rfc3339(),
         url: None,
@@ -52,18 +56,22 @@ fn simulate_classifies_protected_and_candidates() {
     let mut main_run = run("r4", "p1", 400, false, false);
     main_run.branch = Some("main".into());
     let runs = vec![
-        run("r1", "p1", 10, false, false),  // rang 0 → conservé (keep_last 2)
-        run("r2", "p1", 200, true, false),  // lease → protégé
-        run("r3", "p1", 200, false, true),  // en cours → protégé
-        main_run,                           // branche protégée
+        run("r1", "p1", 10, false, false), // rang 0 → conservé (keep_last 2)
+        run("r2", "p1", 200, true, false), // lease → protégé
+        run("r3", "p1", 200, false, true), // en cours → protégé
+        main_run,                          // branche protégée
         run("r5", "p1", 100, false, false), // rang 2, > 90 j → CANDIDAT
         run("r6", "p1", 150, false, false), // rang 3, > 90 j → CANDIDAT
-        run("r7", "p1", 40, false, false),  // rang 1 → conservé (keep_last 2)
+        run("r7", "p1", 40, false, false), // rang 1 → conservé (keep_last 2)
     ];
     let acct = account("http://localhost", CiKind::Github);
     let report = mc_core::ci::simulate(&policy, &acct, &runs, Utc::now());
 
-    let candidate_ids: Vec<&str> = report.candidates.iter().map(|r| r.run_id.as_str()).collect();
+    let candidate_ids: Vec<&str> = report
+        .candidates
+        .iter()
+        .map(|r| r.run_id.as_str())
+        .collect();
     assert_eq!(candidate_ids, vec!["r5", "r6"], "rapport : {report:?}");
     assert_eq!(report.kept_recent, 2);
     let protected: Vec<(&str, &str)> = report
@@ -71,9 +79,15 @@ fn simulate_classifies_protected_and_candidates() {
         .iter()
         .map(|p| (p.run.run_id.as_str(), p.reason.as_str()))
         .collect();
-    assert!(protected.iter().any(|(id, r)| *id == "r2" && r.contains("lease")));
-    assert!(protected.iter().any(|(id, r)| *id == "r3" && r.contains("cours")));
-    assert!(protected.iter().any(|(id, r)| *id == "r4" && r.contains("main")));
+    assert!(protected
+        .iter()
+        .any(|(id, r)| *id == "r2" && r.contains("lease")));
+    assert!(protected
+        .iter()
+        .any(|(id, r)| *id == "r3" && r.contains("cours")));
+    assert!(protected
+        .iter()
+        .any(|(id, r)| *id == "r4" && r.contains("main")));
     assert_eq!(report.total, 7);
 }
 
@@ -101,7 +115,13 @@ async fn ca11_github_delete_flow_requires_simulation_and_confirmation() {
     std::env::set_var("MC_SECRETS_MODE", "memory");
     let server = MockServer::start();
     server.add("GET", "/repos/o/r", 200, &[], r#"{"full_name":"o/r"}"#);
-    server.add("GET", "/repos/o/r/actions/runs", 200, &[], &github_runs_json());
+    server.add(
+        "GET",
+        "/repos/o/r/actions/runs",
+        200,
+        &[],
+        &github_runs_json(),
+    );
     server.add("DELETE", "/repos/o/r/actions/runs/101", 204, &[], "");
 
     let core = mc_core::Core::in_memory(common::skills_dir()).unwrap();
@@ -154,7 +174,12 @@ async fn ca11_github_delete_flow_requires_simulation_and_confirmation() {
 
     // 3) Confirmation erronée → refus.
     let err = core
-        .ci_delete_run(&acct.id, &policy.id, candidate.clone(), "mauvais nom".into())
+        .ci_delete_run(
+            &acct.id,
+            &policy.id,
+            candidate.clone(),
+            "mauvais nom".into(),
+        )
         .await
         .unwrap_err()
         .to_string();
@@ -162,9 +187,14 @@ async fn ca11_github_delete_flow_requires_simulation_and_confirmation() {
     assert_eq!(server.hits("DELETE", del_path), 0);
 
     // 4) Confirmation exacte (nom du pipeline) → suppression émise UNE fois.
-    core.ci_delete_run(&acct.id, &policy.id, candidate.clone(), candidate.pipeline_name.clone())
-        .await
-        .unwrap();
+    core.ci_delete_run(
+        &acct.id,
+        &policy.id,
+        candidate.clone(),
+        candidate.pipeline_name.clone(),
+    )
+    .await
+    .unwrap();
     assert_eq!(server.hits("DELETE", del_path), 1);
 
     // 5) Journal : tentative AVANT résultat, puis résultat ok (CA-14).

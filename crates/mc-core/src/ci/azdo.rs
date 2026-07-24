@@ -37,7 +37,10 @@ impl AzDoCi {
 
     fn auth(&self) -> String {
         let raw = format!(":{}", self.token);
-        format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(raw))
+        format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(raw)
+        )
     }
 
     fn req(&self, method: reqwest::Method, url: String) -> reqwest::RequestBuilder {
@@ -48,15 +51,26 @@ impl AzDoCi {
     }
 
     pub async fn validate(&self) -> Result<String> {
-        let url = format!("{}/{}/_apis/build/builds?$top=1&api-version=7.1", self.base, self.project);
+        let url = format!(
+            "{}/{}/_apis/build/builds?$top=1&api-version=7.1",
+            self.base, self.project
+        );
         let resp = self.req(reqwest::Method::GET, url).send().await?;
         let status = resp.status();
         let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(platform_error(status, &headers, &body, "validation Azure DevOps"));
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "validation Azure DevOps",
+            ));
         }
-        Ok(format!("accès en lecture au projet {} confirmé", self.project))
+        Ok(format!(
+            "accès en lecture au projet {} confirmé",
+            self.project
+        ))
     }
 
     pub async fn list_runs(&self, max: usize) -> Result<Vec<CiRun>> {
@@ -75,7 +89,12 @@ impl AzDoCi {
             let headers = resp.headers().clone();
             let body = resp.text().await.unwrap_or_default();
             if !status.is_success() {
-                return Err(platform_error(status, &headers, &body, "inventaire Azure DevOps"));
+                return Err(platform_error(
+                    status,
+                    &headers,
+                    &body,
+                    "inventaire Azure DevOps",
+                ));
             }
             let next = headers
                 .get("x-ms-continuationtoken")
@@ -88,7 +107,10 @@ impl AzDoCi {
             }
             for b in &builds {
                 let status_s = b["status"].as_str().unwrap_or("").to_string();
-                let running = matches!(status_s.as_str(), "inProgress" | "notStarted" | "postponed" | "cancelling");
+                let running = matches!(
+                    status_s.as_str(),
+                    "inProgress" | "notStarted" | "postponed" | "cancelling"
+                );
                 // `keepForever` / `retainedByRelease` signalent une rétention
                 // côté inventaire ; les leases exactes sont revérifiées avant
                 // toute suppression (delete_run).
@@ -100,7 +122,10 @@ impl AzDoCi {
                         .as_i64()
                         .map(|x| x.to_string())
                         .unwrap_or_default(),
-                    pipeline_name: b["definition"]["name"].as_str().unwrap_or("(pipeline)").to_string(),
+                    pipeline_name: b["definition"]["name"]
+                        .as_str()
+                        .unwrap_or("(pipeline)")
+                        .to_string(),
                     run_id: b["id"].as_i64().map(|x| x.to_string()).unwrap_or_default(),
                     status: status_s,
                     result: b["result"].as_str().map(String::from),
@@ -135,7 +160,12 @@ impl AzDoCi {
         let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(platform_error(status, &headers, &body, "lecture des leases"));
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "lecture des leases",
+            ));
         }
         let v: Value = serde_json::from_str(&body)?;
         Ok(v["value"].as_array().map(|a| a.len()).unwrap_or(0))
@@ -158,7 +188,12 @@ impl AzDoCi {
         let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(platform_error(status, &headers, &body, "suppression du build Azure DevOps"));
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "suppression du build Azure DevOps",
+            ));
         }
         Ok(())
     }

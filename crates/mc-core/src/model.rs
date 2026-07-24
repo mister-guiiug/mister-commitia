@@ -41,10 +41,13 @@ pub fn default_signature_patterns() -> Vec<String> {
 }
 
 pub fn default_convention_types() -> Vec<String> {
-    ["feat", "fix", "refactor", "chore", "docs", "test", "ci", "perf", "build", "style", "revert"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    [
+        "feat", "fix", "refactor", "chore", "docs", "test", "ci", "perf", "build", "style",
+        "revert",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,14 +179,27 @@ pub enum Risk {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Operation {
-    Reword { target: String, new_message: String },
+    Reword {
+        target: String,
+        new_message: String,
+    },
     /// Fusionne `targets` (contigus, ordre du segment) en un commit portant `new_message`.
-    Squash { targets: Vec<String>, new_message: String },
+    Squash {
+        targets: Vec<String>,
+        new_message: String,
+    },
     /// Fusionne `targets` dans le premier d'entre eux en conservant son message.
-    Fixup { targets: Vec<String> },
-    Drop { target: String, reason: String },
+    Fixup {
+        targets: Vec<String>,
+    },
+    Drop {
+        target: String,
+        reason: String,
+    },
     /// Ordre final des commits restants (leaders de groupes), du plus ancien au plus récent.
-    Reorder { order: Vec<String> },
+    Reorder {
+        order: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

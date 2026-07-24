@@ -11,10 +11,7 @@ fn ca2_analyze_flags_without_side_effects() {
     let (f, shas) = feature_fixture();
     let (core, repo_id) = core_with(&f);
 
-    let head_before = f
-        .repo
-        .refname_to_id("refs/heads/feature/checkout")
-        .unwrap();
+    let head_before = f.repo.refname_to_id("refs/heads/feature/checkout").unwrap();
 
     let scan = core
         .repo_scan(&repo_id, Some("feature/checkout".into()))
@@ -29,8 +26,14 @@ fn ca2_analyze_flags_without_side_effects() {
             .iter()
             .any(|fl| fl.sha == sha.to_string() && fl.kind == kind)
     };
-    assert!(flag_for(&shas[1], FlagKind::WeakMessage), "« wip » doit être faible");
-    assert!(flag_for(&shas[2], FlagKind::AiSignature), "mention générée détectée");
+    assert!(
+        flag_for(&shas[1], FlagKind::WeakMessage),
+        "« wip » doit être faible"
+    );
+    assert!(
+        flag_for(&shas[2], FlagKind::AiSignature),
+        "mention générée détectée"
+    );
     assert!(
         flag_for(&shas[3], FlagKind::NonConventional),
         "« update JIRA-123 » n'est pas conforme"

@@ -88,11 +88,43 @@ impl Store {
         Self::init(Connection::open_in_memory()?)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    /// Migrations versionnées, appliquées en transaction dans l'ordre.
+    /// N'ÉDITEZ JAMAIS une migration publiée : ajoutez-en une nouvelle.
+    const MIGRATIONS: &'static [(i64, &'static str)] = &[(1, SCHEMA)];
+
+    fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(SCHEMA)?;
-        Ok(Self { conn: Mutex::new(conn) })
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
+        )?;
+        let current: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )?;
+        for (version, sql) in Self::MIGRATIONS {
+            if *version > current {
+                let tx = conn.transaction()?;
+                tx.execute_batch(sql)?;
+                tx.execute(
+                    "INSERT INTO schema_version (version) VALUES (?1)",
+                    params![version],
+                )?;
+                tx.commit()?;
+            }
+        }
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
+    pub fn schema_version(&self) -> Result<i64> {
+        Ok(self.conn().query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
@@ -138,7 +170,8 @@ impl Store {
     }
 
     pub fn repo_remove(&self, id: &str) -> Result<()> {
-        self.conn().execute("DELETE FROM repos WHERE id=?1", params![id])?;
+        self.conn()
+            .execute("DELETE FROM repos WHERE id=?1", params![id])?;
         Ok(())
     }
 
@@ -197,7 +230,9 @@ impl Store {
     pub fn plan_get(&self, id: &str) -> Result<Plan> {
         let data: Option<String> = self
             .conn()
-            .query_row("SELECT data FROM plans WHERE id=?1", params![id], |r| r.get(0))
+            .query_row("SELECT data FROM plans WHERE id=?1", params![id], |r| {
+                r.get(0)
+            })
             .optional()?;
         let data = data.ok_or_else(|| CoreError::NotFound(format!("plan {id}")))?;
         Ok(serde_json::from_str(&data)?)
@@ -262,7 +297,8 @@ impl Store {
     }
 
     pub fn ci_account_remove(&self, id: &str) -> Result<()> {
-        self.conn().execute("DELETE FROM ci_accounts WHERE id=?1", params![id])?;
+        self.conn()
+            .execute("DELETE FROM ci_accounts WHERE id=?1", params![id])?;
         Ok(())
     }
 
@@ -339,7 +375,8 @@ impl Store {
     }
 
     pub fn ai_provider_remove(&self, id: &str) -> Result<()> {
-        self.conn().execute("DELETE FROM ai_providers WHERE id=?1", params![id])?;
+        self.conn()
+            .execute("DELETE FROM ai_providers WHERE id=?1", params![id])?;
         Ok(())
     }
 
@@ -354,7 +391,11 @@ impl Store {
     pub fn setting_get(&self, key: &str) -> Result<Option<serde_json::Value>> {
         let v: Option<String> = self
             .conn()
-            .query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                params![key],
+                |r| r.get(0),
+            )
             .optional()?;
         Ok(match v {
             Some(s) => Some(serde_json::from_str(&s)?),
@@ -437,7 +478,11 @@ impl Store {
     fn get_json<T: serde::de::DeserializeOwned>(&self, table: &str, id: &str) -> Result<Option<T>> {
         let v: Option<String> = self
             .conn()
-            .query_row(&format!("SELECT data FROM {table} WHERE id=?1"), params![id], |r| r.get(0))
+            .query_row(
+                &format!("SELECT data FROM {table} WHERE id=?1"),
+                params![id],
+                |r| r.get(0),
+            )
             .optional()?;
         Ok(match v {
             Some(s) => Some(serde_json::from_str(&s)?),
