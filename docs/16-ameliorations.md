@@ -63,3 +63,14 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 3. **Ambitieux / V2** : F1 (graphe), F4 (push assisté), F7 (masse CI), T6, T7 (E2E), T8 (signature), T10 (merges), U2, F11, T13.
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
+
+> **Lot 1 livré le 2026-07-24** : T1 (erreurs `{code, message, expected}`, l'UI se branche sur
+> `consent_required`/`confirm_required`), T3 (migrations `schema_version`), T5 (fmt + clippy
+> `-D warnings` + advisories RustSec en CI — couverture : reportée), T12 (`scripts/dev-env.ps1`),
+> U1 (tokens centralisés dans `ui.tsx`), U3 (Modal accessible unique : focus-trap, Échap,
+> aria-modal), U4 (`ConfirmTyped` unifié, piloté par le cœur), U5 (toasts aria-live + boutons
+> `loading`), U7 (classes de tables partagées, SHA mono, hover — tri livré sur les candidats CI),
+> U8 (`VerdictBadge` + légende, réutilisés par le rapport CI), U10 (états vides actionnables),
+> U11 (partiel : espaces insécables et libellés principaux), F5 (import de plan dans l'UI).
+> Vérifié : 31 tests cœur verts, parcours navigateur (confirmation renforcée, consentement,
+> toasts) rejoués.

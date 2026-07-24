@@ -33,6 +33,26 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo check -p mc-desktop --locked
 
+  qualite:
+    name: Qualité (fmt, clippy, advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances système
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatage
+        run: cargo fmt --all --check
+      - name: Clippy (zéro warning)
+        run: cargo clippy -p mc-core --all-targets --locked -- -D warnings
+      - name: Advisories (RustSec)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+
   front:
     name: Build front (type-check + vite)
     runs-on: ubuntu-latest
