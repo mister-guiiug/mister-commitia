@@ -3,8 +3,8 @@
 // clairement signalé dans l'interface via `isMock`.
 
 import type {
-  AuditEvent, CiAccount, CiRun, Plan, PlanOp, Proposal, RepoRef,
-  RetentionPolicy, RiskAxis, ScanResult, SimulationReport, SkillMeta,
+  AuditEvent, CiAccount, CiRun, CommitGraph, Plan, PlanOp, Proposal, PushPreview,
+  PushResult, RepoRef, RetentionPolicy, RiskAxis, ScanResult, SimulationReport, SkillMeta,
 } from "./types";
 
 export const isTauri =
@@ -258,9 +258,20 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
         ["analyse des messages", 0, null, 140],
       ]);
       const repo = mock.repos.find((x) => x.id === args.id)!;
+      // Graphe linéaire de démo (du plus récent au plus ancien), la base est
+      // hors segment. Le cœur calcule les lanes ; ici on les fournit à la main.
+      const graph: CommitGraph = {
+        lanes: 1,
+        nodes: [3, 2, 1, 0].map((ci, row) => ({
+          sha: demoCommits[ci].sha, row, lane: 0, is_merge: false,
+          parents: ci > 0
+            ? [{ sha: demoCommits[ci - 1].sha, lane: 0, in_segment: true }]
+            : [{ sha: "00".padEnd(40, "9"), lane: 0, in_segment: false }],
+        })),
+      };
       const res: ScanResult = {
         repo, branch: "feature/express-payment", base: "00".padEnd(40, "9"),
-        commits: demoCommits,
+        commits: demoCommits, graph,
         report: {
           repo_id: repo.id, branch: "feature/express-payment", base: null,
           tip: demoCommits[3].sha, total: 4, conform: 1, weak: 2, ai_signatures: 1,
@@ -422,6 +433,38 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
       p.status = "rolled_back"; audit("git_rewrite", "rollback", p.fingerprint.branch); return p;
     }
     case "plan_list": return mock.plans.filter((p) => p.repo_id === args.repoId);
+    case "push_preview": {
+      const branch = String(args.branch);
+      const forced = !demoRepo.protected_branches.includes(branch);
+      const prs = args.ciAccountId
+        ? [{ number: 42, title: "feat(pay): express payment flow", url: "https://github.com/mister-guiiug/mister-commitia/pull/42" }]
+        : null;
+      return {
+        remote: "origin", remote_url: demoRepo.remote_url, branch,
+        local_tip: "f0".padEnd(40, "1"), remote_tip: demoCommits[3].sha,
+        ahead: 3, behind: forced ? 3 : 0, needs_force: forced,
+        protected: demoRepo.protected_branches.includes(branch), can_push: true,
+        open_prs: prs,
+        warnings: [
+          ...(forced ? ["réécriture de l'historique distant : 3 commit(s) distant(s) seront remplacés. À coordonner (les collègues devront réaligner leur copie) ; push forcé sécurisé par --force-with-lease."] : []),
+          ...(prs && forced ? ["1 PR ouverte(s) sur cette branche : le push forcé mettra à jour leur contenu."] : []),
+        ],
+      } satisfies PushPreview;
+    }
+    case "push_execute": {
+      const branch = String(args.branch);
+      if (demoRepo.protected_branches.includes(branch)) {
+        throw { code: "refused", message: `refusé : « ${branch} » est protégée : push forcé refusé (réécriture d'historique distant interdite)` } satisfies IpcError;
+      }
+      if (args.confirm !== branch) {
+        throw {
+          code: "confirm_required", expected: branch,
+          message: `confirmation requise : push forcé (--force-with-lease) : saisir exactement « ${branch} » pour confirmer la réécriture de l'historique distant`,
+        } satisfies IpcError;
+      }
+      audit("git_push", "push", branch);
+      return { branch, forced: true, remote_tip: "f0".padEnd(40, "1"), detail: "historique distant réécrit (force-with-lease)" } satisfies PushResult;
+    }
     case "plan_export": return JSON.stringify(mock.plans.find((x) => x.id === args.planId), null, 2);
     case "plan_risk": return [
       { axe: "branche", verdict: "ok", motif: "« feature/express-payment » n'est pas protégée" },

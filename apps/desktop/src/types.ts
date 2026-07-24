@@ -74,6 +74,25 @@ export interface AnalysisReport {
   generated_at: string;
 }
 
+export interface GraphParent {
+  sha: string;
+  lane: number;
+  in_segment: boolean;
+}
+
+export interface GraphNode {
+  sha: string;
+  row: number;
+  lane: number;
+  is_merge: boolean;
+  parents: GraphParent[];
+}
+
+export interface CommitGraph {
+  nodes: GraphNode[];
+  lanes: number;
+}
+
 export interface ScanResult {
   repo: RepoRef;
   branch: string;
@@ -81,6 +100,7 @@ export interface ScanResult {
   commits: CommitInfo[];
   report: AnalysisReport;
   squash_suggestions: string[][];
+  graph: CommitGraph;
 }
 
 export type Risk = "low" | "medium" | "high";
@@ -240,5 +260,33 @@ export interface SkillMeta {
 export interface SkillTestResult {
   case: string;
   passed: boolean;
+  detail: string;
+}
+
+export interface PrRef {
+  number: number;
+  title: string;
+  url: string;
+}
+
+export interface PushPreview {
+  remote: string | null;
+  remote_url: string | null;
+  branch: string;
+  local_tip: string;
+  remote_tip: string | null;
+  ahead: number;
+  behind: number;
+  needs_force: boolean;
+  protected: boolean;
+  can_push: boolean;
+  open_prs: PrRef[] | null;
+  warnings: string[];
+}
+
+export interface PushResult {
+  branch: string;
+  forced: boolean;
+  remote_tip: string;
   detail: string;
 }

@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, Download, FileText, FlaskConical, GitBranch, Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload, XCircle,
+  CheckCircle2, Download, FileText, FlaskConical, GitBranch, GitGraph as GitGraphIcon, List,
+  Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload, UploadCloud, XCircle,
 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import type {
-  BranchInfo, CommitInfo, Plan, PlanOp, Proposal, RepoRef, RiskAxis, ScanResult,
+  BranchInfo, CiAccount, CommitInfo, Plan, PlanOp, Proposal, PushPreview, PushResult,
+  RepoRef, RiskAxis, ScanResult,
 } from "../types";
+import GitGraph from "../GitGraph";
 import { useTask } from "../tasks";
 import {
   Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, ICON_SM, Modal, ProgressPanel,
@@ -36,6 +39,10 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   const [confirmReq, setConfirmReq] = useState<{ expected: string; message: string } | null>(null);
   const [diffView, setDiffView] = useState<{ sha: string; subject: string; patch: string } | null>(null);
   const [order, setOrder] = useState<string[]>([]);
+  const [view, setView] = useState<"list" | "graph">("list");
+  const [pushPreview, setPushPreview] = useState<PushPreview | null>(null);
+  const [pushTyped, setPushTyped] = useState("");
+  const [pushing, setPushing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // T11 : texte streamé par groupe pendant la génération (affiché en direct).
@@ -311,6 +318,47 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     }
   };
 
+  // F4 : push assisté — aperçu (divergence, PR ouvertes) puis force-with-lease guidé.
+  const openPush = async () => {
+    setError(null);
+    setPushTyped("");
+    setBusy(true);
+    try {
+      const accounts = await call<CiAccount[]>("ci_account_list");
+      const gh = accounts.find((a) => a.kind === "github" || a.kind === "github_enterprise");
+      const pv = await call<PushPreview>("push_preview", {
+        repoId: repo.id, branch, ciAccountId: gh?.id ?? null,
+      });
+      setPushPreview(pv);
+    } catch (e) {
+      setError(asIpcError(e).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doPush = async () => {
+    if (!pushPreview) return;
+    setPushing(true);
+    try {
+      const res = await call<PushResult>("push_execute", {
+        repoId: repo.id, branch, confirm: pushPreview.needs_force ? pushTyped : null,
+      });
+      setPushPreview(null);
+      toast(
+        "success",
+        res.forced
+          ? "Push forcé effectué (force-with-lease) — historique distant réécrit"
+          : "Commits poussés vers le remote",
+      );
+      await doScan(branch);
+    } catch (e) {
+      setError(asIpcError(e).message);
+    } finally {
+      setPushing(false);
+    }
+  };
+
   const exportPlan = async () => {
     if (!plan) return;
     const content = await call<string>("plan_export", { planId: plan.id });
@@ -453,6 +501,24 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         }
         actions={
           <>
+            <div className="mr-1 inline-flex overflow-hidden rounded border border-slate-700" role="group" aria-label="Mode d'affichage">
+              <button
+                type="button"
+                aria-pressed={view === "list"}
+                onClick={() => setView("list")}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs ${view === "list" ? "bg-slate-700 text-slate-100" : "text-slate-400 hover:bg-slate-800"}`}
+              >
+                <List size={ICON_SM} /> Liste
+              </button>
+              <button
+                type="button"
+                aria-pressed={view === "graph"}
+                onClick={() => setView("graph")}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs ${view === "graph" ? "bg-slate-700 text-slate-100" : "text-slate-400 hover:bg-slate-800"}`}
+              >
+                <GitGraphIcon size={ICON_SM} /> Graphe
+              </button>
+            </div>
             <select
               className={inputCls + " !w-auto"}
               aria-label="Skill à utiliser"
@@ -480,6 +546,9 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           </>
         }
       >
+        {view === "graph" ? (
+          <GitGraph graph={scan.graph} commits={scan.commits} onSelect={showDiff} />
+        ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-800">
@@ -587,6 +656,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
             ))}
           </tbody>
         </table>
+        )}
       </Card>
 
       <div className="grid grid-cols-2 gap-4">
@@ -697,6 +767,16 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
               {plan?.status === "applied" && (
                 <Button onClick={rollback} loading={busy}>
                   <Undo2 size={ICON_SM} /> Rollback
+                </Button>
+              )}
+              {plan?.status === "applied" && (
+                <Button
+                  kind="primary"
+                  onClick={openPush}
+                  loading={busy}
+                  title="Pousser la branche réécrite (force-with-lease guidé)"
+                >
+                  <UploadCloud size={ICON_SM} /> Pousser
                 </Button>
               )}
               {plan && (
@@ -848,6 +928,96 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
               </div>
             ))}
           </pre>
+        </Modal>
+      )}
+
+      {pushPreview && (
+        <Modal
+          title="Pousser vers le remote"
+          tone={pushPreview.needs_force ? "rose" : "sky"}
+          width={620}
+          onClose={() => setPushPreview(null)}
+          footer={
+            <>
+              <Button onClick={() => setPushPreview(null)}>Annuler</Button>
+              <Button
+                kind={pushPreview.needs_force ? "danger" : "primary"}
+                loading={pushing}
+                disabled={
+                  !pushPreview.can_push ||
+                  (pushPreview.needs_force && pushPreview.protected) ||
+                  (pushPreview.needs_force && pushTyped !== branch)
+                }
+                onClick={doPush}
+              >
+                {pushPreview.needs_force ? "Réécrire le remote (force-with-lease)" : "Pousser"}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-2.5 text-sm">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <Badge tone="slate">{pushPreview.remote ?? "aucun remote"}</Badge>
+              <span className="truncate text-slate-400">{pushPreview.remote_url}</span>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge tone="teal">{pushPreview.ahead} commit(s) en avance</Badge>
+              <Badge tone={pushPreview.behind > 0 ? "amber" : "slate"}>
+                {pushPreview.behind} en retard
+              </Badge>
+              {pushPreview.needs_force ? (
+                <Badge tone="rose">push forcé requis (historique distant réécrit)</Badge>
+              ) : (
+                <Badge tone="teal">fast-forward</Badge>
+              )}
+              {pushPreview.protected && <Badge tone="rose">branche protégée</Badge>}
+            </div>
+            {pushPreview.warnings.length > 0 && (
+              <ul className="list-inside list-disc space-y-1 rounded border border-amber-900 bg-amber-950/30 p-2 text-xs text-amber-200">
+                {pushPreview.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            )}
+            {pushPreview.open_prs && pushPreview.open_prs.length > 0 && (
+              <div className="text-xs">
+                <div className="mb-1 font-semibold text-slate-300">
+                  PR ouvertes sur cette branche (seront mises à jour) :
+                </div>
+                <ul className="space-y-0.5">
+                  {pushPreview.open_prs.map((pr) => (
+                    <li key={pr.number} className="flex items-center gap-1.5">
+                      <Badge tone="sky">#{pr.number}</Badge>
+                      <span className="truncate text-slate-300">{pr.title}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="rounded border border-slate-800 bg-slate-950/50 p-2 text-xs text-slate-400">
+              Checklist coordination : prévenir l'équipe&nbsp;; s'assurer qu'aucun collègue n'a de
+              travail non poussé sur cette branche&nbsp;; le <code>--force-with-lease</code> échoue
+              sans rien écraser si le remote a bougé depuis le dernier fetch.
+            </div>
+            {pushPreview.protected && pushPreview.needs_force ? (
+              <ErrorBox error="Branche protégée : le push forcé est refusé par le cœur. Retirer la protection ou pousser une nouvelle branche." />
+            ) : pushPreview.needs_force ? (
+              <>
+                <p className="text-xs text-slate-400">
+                  Pour confirmer la réécriture distante, saisir exactement&nbsp;:{" "}
+                  <code className="text-rose-300">{branch}</code>
+                </p>
+                <input
+                  autoFocus
+                  className={inputCls}
+                  value={pushTyped}
+                  onChange={(e) => setPushTyped(e.target.value)}
+                  placeholder={branch}
+                  aria-label={`Saisir ${branch} pour confirmer le push forcé`}
+                />
+              </>
+            ) : null}
+          </div>
         </Modal>
       )}
 

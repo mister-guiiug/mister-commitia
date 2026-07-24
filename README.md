@@ -40,8 +40,8 @@ Architecture réalisée conformément à l'[architecture cible](docs/05-architec
 | Epic | État | Détail |
 |---|---|---|
 | E1 Socle & workspace | ✅ | Déclaration multi-dépôts, SQLite local, mode offline complet |
-| E2 Analyse d'historique | ✅ | Segment merge-base..tip, heuristiques (faible/conforme/mentions générées/doublons), fichiers & trailers & signatures & partage par commit ; vue graphe simple (liste ordonnée) — graphe visuel riche : V2 |
-| E3 Moteur de plan | ✅ | Reword pur git2 (arbres garantis intacts) + squash/fixup/drop/reorder via le **sequencer natif de Git** piloté par `GIT_SEQUENCE_EDITOR` en worktree temporaire ; dry-run **réel** dans `refs/mc/preview/*` ; backup réf+tag ; apply par bascule ; rollback ; export/import JSON ; empreinte anti-dérive |
+| E2 Analyse d'historique | ✅ | Segment merge-base..tip, heuristiques (faible/conforme/mentions générées/doublons), fichiers & trailers & signatures & partage par commit ; **vue graphe SVG** (lanes calculées par le cœur, merges visibles, bornes hors-segment) à côté de la liste |
+| E3 Moteur de plan | ✅ | Reword pur git2 (arbres garantis intacts) + squash/fixup/drop/reorder via le **sequencer natif de Git** piloté par `GIT_SEQUENCE_EDITOR` en worktree temporaire ; dry-run **réel** dans `refs/mc/preview/*` ; backup réf+tag ; apply par bascule ; rollback ; export/import JSON ; empreinte anti-dérive ; **push assisté** (`--force-with-lease` guidé, checklist, PR ouvertes, branche protégée refusée) |
 | E4 Agent IA & skills | ✅ | Chargement des skills YAML, **garde-fous vérifiés par l'application** (post-conditions), providers Ollama / endpoint compatible OpenAI / Anthropic + **assistant local déterministe** (repli hors-ligne), consentement avec aperçu avant tout envoi distant, runner de self-tests ; réponses **streamées** (SSE/NDJSON) avec réessais automatiques (backoff, `Retry-After`) et budget de tokens par lot |
 | E5 Sécurité & secrets | ✅ | Coffre OS via crate `keyring` (backend mémoire pour tests/CI), scopes affichés avant enregistrement, redaction systématique des sorties |
 | E6 CI/CD | ✅ | Clients GitHub Actions & Azure DevOps Builds (pagination, continuation token, 429/Retry-After), inventaire avec leases, politique + **simulation obligatoire**, suppression unitaire à double confirmation, revérification des leases avant tout DELETE |
@@ -77,7 +77,7 @@ git push origin v0.1.0
 
 Le workflow [Release](.github/workflows/release.yml) exécute alors : tests du cœur (gate), contrôle de cohérence tag ↔ version, bundles Windows (**MSI, installeur NSIS, zip portable**), `SHA256SUMS.txt`, puis crée la **GitHub Release** avec notes générées automatiquement.
 
-**Toolchain Windows** : les bundles officiels sont construits par la CI (windows-latest, MSVC). En local, MSVC Build Tools est la voie recommandée pour `mc-desktop`. Sans MSVC, l'hôte `x86_64-pc-windows-gnu` + llvm-mingw suffit pour **développer et tester `mc-core`** (validé : 47 tests — recette outillée : `. .\scripts\dev-env.ps1`) ; la compilation du binaire Tauri en gnu peut échouer selon l'environnement (build scripts volumineux — constaté sur poste durci EDR).
+**Toolchain Windows** : les bundles officiels sont construits par la CI (windows-latest, MSVC). En local, MSVC Build Tools est la voie recommandée pour `mc-desktop`. Sans MSVC, l'hôte `x86_64-pc-windows-gnu` + llvm-mingw suffit pour **développer et tester `mc-core`** (validé : 53 tests — recette outillée : `. .\scripts\dev-env.ps1`) ; la compilation du binaire Tauri en gnu peut échouer selon l'environnement (build scripts volumineux — constaté sur poste durci EDR).
 
 ## Conventions de lecture
 

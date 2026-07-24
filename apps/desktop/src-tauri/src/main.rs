@@ -233,6 +233,38 @@ fn plan_import(core: tauri::State<'_, ArcCore>, repo_id: String, json: String) -
 }
 
 // ---------------------------------------------------------------------------
+// E3b — push assisté (F4)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn push_preview(
+    core: tauri::State<'_, ArcCore>,
+    repo_id: String,
+    branch: String,
+    ci_account_id: Option<String>,
+) -> CmdResult<mc_core::api::PushPreview> {
+    core.push_preview(&repo_id, &branch, ci_account_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+async fn push_execute(
+    core: tauri::State<'_, ArcCore>,
+    repo_id: String,
+    branch: String,
+    confirm: Option<String>,
+) -> CmdResult<mc_core::api::PushResult> {
+    // Réseau + git : hors des workers IPC.
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.push_execute(&repo_id, &branch, confirm).map_err(err)
+    })
+    .await
+    .map_err(join_err)?
+}
+
+// ---------------------------------------------------------------------------
 // E4 — skills & IA
 // ---------------------------------------------------------------------------
 
@@ -547,6 +579,8 @@ fn main() {
             plan_risk,
             plan_export,
             plan_import,
+            push_preview,
+            push_execute,
             skills_list,
             skill_read,
             skill_write,
