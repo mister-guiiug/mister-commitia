@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpDown, PlugZap, ShieldAlert, Trash2 } from "lucide-react";
+import { ArrowUpDown, Eraser, PlugZap, ShieldAlert, Trash2 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import { useTask } from "../tasks";
-import type { BatchDeleteResult, CiAccount, CiKind, CiRun, RetentionPolicy, SimulationReport } from "../types";
+import type { BatchDeleteResult, CiAccount, CiKind, CiRun, PurgeResult, RetentionPolicy, SimulationReport } from "../types";
 import {
   Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, Field, ICON_SM, ProgressPanel,
   VerdictBadge, inputCls, trCls, useToast,
@@ -42,6 +42,10 @@ export default function CiPage() {
   // Suppression EN MASSE (F7) : confirmation + point de reprise.
   const [batchConfirm, setBatchConfirm] = useState(false);
   const [batchDone, setBatchDone] = useState<string[]>([]);
+  // Purge des logs/artefacts (F7, extension) : reclaim de stockage, runs conservés.
+  const [purge, setPurge] = useState(false);
+  const [purgeLogs, setPurgeLogs] = useState(true);
+  const [purgeArtifacts, setPurgeArtifacts] = useState(true);
 
   const refresh = async () => {
     const [a, p] = await Promise.all([
@@ -186,6 +190,40 @@ export default function CiPage() {
     } catch (e) {
       const ie = asIpcError(e);
       if (ie.code === "cancelled") toast("info", "Suppression en masse annulée");
+      else setError(ie.message);
+    } finally {
+      task.end();
+      setBusy(false);
+    }
+  };
+
+  // F7 (extension) : runs éligibles à la purge (les runs en cours sont exclus).
+  const purgeTargets = runs.filter((r) => !r.running);
+
+  const doPurge = async (confirm: string) => {
+    if (!purgeLogs && !purgeArtifacts) {
+      setError("Rien à purger : activer les logs et/ou les artefacts.");
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    const taskId = task.begin(`Purge de ${purgeTargets.length} run(s)`);
+    try {
+      const res = await call<PurgeResult>("ci_purge_assets", {
+        accountId: account, runs, purgeLogs, purgeArtifacts, confirm, taskId,
+      });
+      setPurge(false);
+      const failed = res.failed.length;
+      toast(
+        failed > 0 ? "error" : res.cancelled ? "info" : "success",
+        res.cancelled
+          ? `Purge interrompue : ${res.artifacts_deleted} artefact(s), ${res.logs_deleted} log(s)`
+          : `${res.artifacts_deleted} artefact(s) + ${res.logs_deleted} log(s) purgés sur ${res.runs} run(s)`
+            + (failed ? `, ${failed} échec(s)` : "") + " — runs conservés, journalisé",
+      );
+    } catch (e) {
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Purge annulée");
       else setError(ie.message);
     } finally {
       task.end();
@@ -413,6 +451,21 @@ export default function CiPage() {
             Inventorier puis simuler&nbsp;: le rapport distingue candidats et protégés avec motifs.
           </Empty>
         )}
+        {runs.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
+            <span className="flex-1 text-xs text-slate-400">
+              Reclaim de stockage&nbsp;: purge des logs et artefacts en <b>conservant</b> les runs
+              ({purgeTargets.length} run(s) éligible(s)&nbsp;; runs en cours ignorés). GitHub uniquement.
+            </span>
+            <Button
+              onClick={() => setPurge(true)}
+              disabled={purgeTargets.length === 0}
+              title="Purge des logs et artefacts — les runs sont conservés"
+            >
+              <Eraser size={ICON_SM} /> Purger logs + artefacts ({purgeTargets.length})
+            </Button>
+          </div>
+        )}
       </Card>
 
       {deleting && (
@@ -449,6 +502,43 @@ export default function CiPage() {
           busy={busy}
           onConfirm={(typed) => void doBatch(typed)}
           onClose={() => setBatchConfirm(false)}
+        />
+      )}
+
+      {purge && (
+        <ConfirmTyped
+          title="Purge des logs et artefacts"
+          description={
+            <>
+              <b>{purgeTargets.length}</b> run(s) verront leurs données de stockage purgées&nbsp;;
+              <b> les runs eux-mêmes sont conservés</b> (contrairement à la suppression). Opération
+              irréversible et journalisée&nbsp;; les runs en cours sont ignorés. Choisir ce qui est
+              purgé, puis saisir le <b>nombre</b> de runs.
+              <div className="mt-2 flex gap-4 text-xs">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={purgeArtifacts}
+                    onChange={(e) => setPurgeArtifacts(e.target.checked)}
+                  />
+                  Artefacts
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={purgeLogs}
+                    onChange={(e) => setPurgeLogs(e.target.checked)}
+                  />
+                  Logs
+                </label>
+              </div>
+            </>
+          }
+          expected={String(purgeTargets.length)}
+          confirmLabel={`Purger ${purgeTargets.length} run(s)`}
+          busy={busy}
+          onConfirm={(typed) => void doPurge(typed)}
+          onClose={() => setPurge(false)}
         />
       )}
     </div>

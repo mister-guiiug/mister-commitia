@@ -3,8 +3,8 @@
 // clairement signalé dans l'interface via `isMock`.
 
 import type {
-  AuditEvent, BatchDeleteResult, CiAccount, CiRun, CommitGraph, Plan, PlanOp, Proposal, PushPreview,
-  PushResult, RepoRef, RetentionPolicy, RiskAxis, ScanResult, SimulationReport, SkillMeta,
+  AuditEvent, BatchDeleteResult, CiAccount, CiRun, CommitGraph, Plan, PlanOp, Proposal, PurgeResult,
+  PushPreview, PushResult, RepoRef, RetentionPolicy, RiskAxis, ScanResult, SimulationReport, SkillMeta,
 } from "./types";
 
 export const isTauri =
@@ -557,6 +557,28 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
         audit("ci_cleanup", "delete", `run ${pendingRuns[i].run_id}`);
       }
       return { total: pendingRuns.length, deleted: [...deleted], failed: [], cancelled } satisfies BatchDeleteResult;
+    }
+    case "ci_purge_assets": {
+      const pruns = ((args.runs as CiRun[]) ?? []).filter((r) => !r.running);
+      const expected = String(pruns.length);
+      if (args.confirm !== expected) {
+        throw { code: "confirm_required", expected, message: `confirmation requise : purge : saisir exactement « ${expected} » (nombre de runs)` } satisfies IpcError;
+      }
+      if (!args.purgeLogs && !args.purgeArtifacts) {
+        throw { code: "invalid", message: "invalide : rien à purger (activer logs et/ou artefacts)" } satisfies IpcError;
+      }
+      const tid = typeof args.taskId === "string" && args.taskId ? args.taskId : null;
+      let arts = 0, logs = 0, cancelled = false;
+      for (let i = 0; i < pruns.length; i++) {
+        if (tid && mockCancelled.has(tid)) { cancelled = true; break; }
+        if (tid) emitTask({ task_id: tid, task: "ci_purge_assets", kind: "progress", phase: "purge des logs/artefacts", current: i, total: pruns.length });
+        await sleep(180);
+        if (tid && mockCancelled.has(tid)) { cancelled = true; break; }
+        if (args.purgeArtifacts) arts += 2;
+        if (args.purgeLogs) logs += 1;
+        audit("ci_cleanup", "purge", `run ${pruns[i].run_id}`);
+      }
+      return { runs: cancelled ? 0 : pruns.length, artifacts_deleted: arts, logs_deleted: logs, failed: [], cancelled } satisfies PurgeResult;
     }
     case "ai_provider_save": {
       const p = { id: id("ai"), kind: String(args.kind), base_url: (args.baseUrl as string) ?? null, model: (args.model as string) ?? null, key_ref: args.apiKey ? "ai:x" : null, is_default: Boolean(args.isDefault) };

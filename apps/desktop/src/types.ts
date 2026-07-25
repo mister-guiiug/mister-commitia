@@ -234,6 +234,20 @@ export interface BatchDeleteResult {
   cancelled: boolean;
 }
 
+export interface CiArtifact {
+  id: string;
+  name: string;
+  size_bytes: number;
+}
+
+export interface PurgeResult {
+  runs: number;
+  artifacts_deleted: number;
+  logs_deleted: number;
+  failed: BatchFailure[];
+  cancelled: boolean;
+}
+
 export type AiProviderKind = "rule_based" | "ollama" | "open_ai_compat" | "anthropic";
 
 export interface AiProviderConfig {

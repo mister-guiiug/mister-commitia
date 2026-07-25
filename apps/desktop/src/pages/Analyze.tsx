@@ -28,6 +28,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [branch, setBranch] = useState<string>("");
+  const [baseRef, setBaseRef] = useState<string>("");
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [skill, setSkill] = useState("conventional-commits");
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -53,12 +54,19 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     setStreams((s) => ({ ...s, [group]: (s[group] ?? "") + delta })),
   );
 
-  const doScan = async (b?: string) => {
+  // F6 : base explicite du segment (branche/tag/SHA). Vide = merge-base auto.
+  // `base` explicite (null pour forcer l'auto) prime sur l'état `baseRef`.
+  const doScan = async (b?: string, base?: string | null) => {
     setError(null);
     setBusy(true);
     const taskId = task.begin("Analyse de la branche");
     try {
-      const res = await call<ScanResult>("repo_scan", { id: repo.id, branch: b ?? null, taskId });
+      const res = await call<ScanResult>("repo_scan", {
+        id: repo.id,
+        branch: b ?? null,
+        base: base === undefined ? baseRef.trim() || null : base,
+        taskId,
+      });
       setScan(res);
       setBranch(res.branch);
       setSelection(new Set());
@@ -455,7 +463,8 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           onChange={(e) => {
             setPlan(null);
             setDrops(new Set());
-            void doScan(e.target.value);
+            setBaseRef("");
+            void doScan(e.target.value, null);
           }}
         >
           {branches.map((b) => (
@@ -467,6 +476,37 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           ))}
           {!branches.some((b) => b.name === branch) && <option value={branch}>{branch}</option>}
         </select>
+        {/* F6 : base explicite du segment (branche/tag/SHA), utile pour branches empilées. */}
+        <div className="flex items-center gap-1 text-xs text-slate-400">
+          <label htmlFor="baseref">base&nbsp;:</label>
+          <input
+            id="baseref"
+            className={inputCls + " !w-44"}
+            placeholder="auto (merge-base)"
+            value={baseRef}
+            onChange={(e) => setBaseRef(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void doScan(branch);
+            }}
+            aria-label="Base du segment : branche, tag ou SHA (F6)"
+            title="Forcer la base du segment (branche, tag ou SHA) — utile pour les branches empilées"
+          />
+          <Button kind="ghost" onClick={() => void doScan(branch)} disabled={busy}>
+            appliquer
+          </Button>
+          {baseRef && (
+            <Button
+              kind="ghost"
+              onClick={() => {
+                setBaseRef("");
+                void doScan(branch, null);
+              }}
+              disabled={busy}
+            >
+              auto
+            </Button>
+          )}
+        </div>
         <div className="ml-auto flex gap-2 text-xs">
           <Badge tone="slate">{scan.report.total} commits</Badge>
           <Badge tone="teal">{scan.report.conform} conformes</Badge>
