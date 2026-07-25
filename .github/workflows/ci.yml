@@ -53,6 +53,43 @@ jobs:
         with:
           command: check advisories
 
+  couverture:
+    name: Couverture (plan-engine ≥ 80%)
+    runs-on: ubuntu-latest
+    env:
+      MC_SECRETS_MODE: memory
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.org
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.org
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dépendances système
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: Mesure de couverture (mc-core)
+        run: cargo llvm-cov --locked -p mc-core --json --output-path cov.json --ignore-filename-regex 'tests/'
+      - name: Gate ≥ 80% sur plan-engine (DoD §9.2)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          data = json.load(open("cov.json"))
+          d = data["data"][0]
+          plan = next((f for f in d["files"] if f["filename"].replace("\\", "/").endswith("src/plan.rs")), None)
+          if not plan:
+              print("::error::plan.rs introuvable dans le rapport de couverture"); sys.exit(1)
+          pct = plan["summary"]["lines"]["percent"]
+          tot = d["totals"]["lines"]["percent"]
+          print(f"Couverture lignes plan.rs : {pct:.1f}%")
+          print(f"Couverture lignes mc-core (global) : {tot:.1f}%")
+          if pct < 80.0:
+              print(f"::error::couverture plan.rs {pct:.1f}% < 80% (DoD §9.2)"); sys.exit(1)
+          PY
+
   front:
     name: Build front (type-check + vite)
     runs-on: ubuntu-latest

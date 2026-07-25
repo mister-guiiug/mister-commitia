@@ -133,7 +133,7 @@ export default function SettingsPage({
             </Field>
             <Field label="Politique d'attribution IA">
               <select className={inputCls} value={policy} onChange={(e) => setPolicy(e.target.value as typeof policy)}>
-                <option value="keep-required">keep-required — traçabilité IA exigée : la skill de nettoyage REFUSE (défaut)</option>
+                <option value="keep-required">keep-required — traçabilité IA exigée&nbsp;: la skill de nettoyage REFUSE (défaut)</option>
                 <option value="normalization-allowed">normalization-allowed — normalisation des mentions autorisée</option>
               </select>
             </Field>
@@ -146,7 +146,7 @@ export default function SettingsPage({
               </Field>
             </div>
             <p className="text-xs text-slate-500">
-              La normalisation des messages est soumise à ces règles : si la politique du dépôt impose la
+              La normalisation des messages est soumise à ces règles&nbsp;: si la politique du dépôt impose la
               traçabilité des contributions assistées, l'application refuse la suppression et l'explique.
               Chaque normalisation appliquée est journalisée avec le contenu retiré.
             </p>

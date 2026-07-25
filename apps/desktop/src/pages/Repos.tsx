@@ -103,7 +103,7 @@ export default function ReposPage({
 
       {removing && (
         <Modal
-          title={`Retirer « ${removing.name} » du workspace ?`}
+          title={`Retirer « ${removing.name} » du workspace ?`}
           onClose={() => setRemoving(null)}
           footer={
             <>

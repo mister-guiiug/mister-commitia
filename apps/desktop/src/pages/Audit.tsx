@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
-import { Download, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowUpDown, Download, RefreshCw } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import type { AuditEvent } from "../types";
 import { Badge, Button, Card, Empty, ErrorBox, ICON_SM, shaCls, thCls, trCls, useToast } from "../ui";
+
+type SortKey = "seq" | "category" | "action" | "result";
 
 const toneByCategory: Record<string, string> = {
   git_rewrite: "amber",
@@ -12,10 +14,44 @@ const toneByCategory: Record<string, string> = {
   config: "slate",
 };
 
+/// En-tête de colonne triable (U7) : clic pour trier, indicateur de sens.
+function SortTh({
+  k, sort, onSort, children,
+}: {
+  k: SortKey; sort: { key: SortKey; asc: boolean }; onSort: (k: SortKey) => void; children: ReactNode;
+}) {
+  const active = sort.key === k;
+  return (
+    <th className={thCls}>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 hover:text-slate-200"
+        onClick={() => onSort(k)}
+        aria-label={`Trier par ${typeof children === "string" ? children : k}`}
+      >
+        {children}
+        {active ? (sort.asc ? "↑" : "↓") : <ArrowUpDown size={12} className="opacity-40" />}
+      </button>
+    </th>
+  );
+}
+
 export default function AuditPage() {
   const toast = useToast();
   const [events, setEvents] = useState<AuditEvent[]>([]);
+  const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: "seq", asc: false });
   const [error, setError] = useState<string | null>(null);
+
+  const toggleSort = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, asc: !s.asc } : { key, asc: true }));
+
+  const sorted = useMemo(() => {
+    const dir = sort.asc ? 1 : -1;
+    return [...events].sort((a, b) => {
+      if (sort.key === "seq") return (a.seq - b.seq) * dir;
+      return String(a[sort.key]).localeCompare(String(b[sort.key])) * dir;
+    });
+  }, [events, sort]);
 
   const refresh = async () => {
     setError(null);
@@ -63,16 +99,16 @@ export default function AuditPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-800">
-                <th className={thCls}>#</th>
+                <SortTh k="seq" sort={sort} onSort={toggleSort}>#</SortTh>
                 <th className={thCls}>Horodatage</th>
-                <th className={thCls}>Catégorie</th>
-                <th className={thCls}>Action</th>
+                <SortTh k="category" sort={sort} onSort={toggleSort}>Catégorie</SortTh>
+                <SortTh k="action" sort={sort} onSort={toggleSort}>Action</SortTh>
                 <th className={thCls}>Cible</th>
-                <th className={thCls}>Résultat</th>
+                <SortTh k="result" sort={sort} onSort={toggleSort}>Résultat</SortTh>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70">
-              {events.map((e) => (
+              {sorted.map((e) => (
                 <tr key={e.seq} className={`align-top ${trCls}`}>
                   <td className="py-1.5 pr-3 text-slate-500">{e.seq}</td>
                   <td className={"py-1.5 pr-3 whitespace-nowrap " + shaCls}>{e.ts.replace("T", " ").replace("Z", "")}</td>
