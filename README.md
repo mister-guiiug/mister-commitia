@@ -41,7 +41,7 @@ Architecture réalisée conformément à l'[architecture cible](docs/05-architec
 |---|---|---|
 | E1 Socle & workspace | ✅ | Déclaration multi-dépôts, SQLite local, mode offline complet |
 | E2 Analyse d'historique | ✅ | Segment merge-base..tip, heuristiques (faible/conforme/mentions générées/doublons), fichiers & trailers & signatures & partage par commit ; **vue graphe SVG** (lanes calculées par le cœur, merges visibles, bornes hors-segment) à côté de la liste |
-| E3 Moteur de plan | ✅ | Reword pur git2 (arbres garantis intacts) + squash/fixup/drop/reorder via le **sequencer natif de Git** piloté par `GIT_SEQUENCE_EDITOR` en worktree temporaire ; dry-run **réel** dans `refs/mc/preview/*` ; backup réf+tag ; apply par bascule ; rollback ; export/import JSON ; empreinte anti-dérive ; **push assisté** (`--force-with-lease` guidé, checklist, PR ouvertes, branche protégée refusée) |
+| E3 Moteur de plan | ✅ | Reword pur git2 (arbres garantis intacts, **y compris à travers un merge** via `reword_dag`) + squash/fixup/drop/reorder via le **sequencer natif de Git** (rapport de conflits par fichier) ; dry-run **réel** dans `refs/mc/preview/*` ; backup réf+tag ; apply par bascule ; rollback ; export/import JSON ; empreinte anti-dérive ; **push assisté** (`--force-with-lease` guidé, checklist, PR ouvertes, branche protégée refusée) |
 | E4 Agent IA & skills | ✅ | Chargement des skills YAML, **garde-fous vérifiés par l'application** (post-conditions), providers Ollama / endpoint compatible OpenAI / Anthropic + **assistant local déterministe** (repli hors-ligne), consentement avec aperçu avant tout envoi distant, runner de self-tests ; réponses **streamées** (SSE/NDJSON) avec réessais automatiques (backoff, `Retry-After`) et budget de tokens par lot |
 | E5 Sécurité & secrets | ✅ | Coffre OS via crate `keyring` (backend mémoire pour tests/CI), scopes affichés avant enregistrement, redaction systématique des sorties |
 | E6 CI/CD | ✅ | Clients GitHub Actions & Azure DevOps Builds (pagination, continuation token, 429/Retry-After), inventaire avec leases, politique + **simulation obligatoire**, suppression unitaire à double confirmation, revérification des leases avant tout DELETE |
@@ -50,9 +50,9 @@ Architecture réalisée conformément à l'[architecture cible](docs/05-architec
 
 Les opérations longues (analyse, dry-run, application, inventaire/simulation CI, génération IA) émettent leur **progression** sur un canal d'événements unique et s'**annulent** proprement : arrêt coopératif aux points sûrs uniquement, points de non-retour (backup puis bascule) jamais interrompus.
 
-**Vérification** : suite de tests d'intégration sur dépôts Git synthétiques couvrant les critères CA-1 → CA-14 ([détail](docs/14-criteres-acceptation.md)) ; UI vérifiée en mode navigateur (mock IPC intégré : `npm run dev` dans `apps/desktop` sans Tauri).
+**Vérification** : 57 tests cœur (dont **proptest** sur le compilateur de plan) sur dépôts Git synthétiques couvrant les critères CA-1 → CA-14 ([détail](docs/14-criteres-acceptation.md)) ; **E2E de l'interface** (Playwright, mode démonstration) à chaque push, plus un harnais **desktop natif** tauri-driver ([`e2e-native/`](apps/desktop/e2e-native), expérimental) ; UI vérifiée en mode navigateur (mock IPC intégré : `npm run dev` dans `apps/desktop` sans Tauri). Thème clair/sombre et i18n FR/EN.
 
-**Reste pour clore le MVP** (voir [backlog](docs/09-backlog-mvp.md)) : E2E desktop automatisé via tauri-driver, packaging signé, documentation utilisateur de prise en main.
+**Reste pour clore le MVP** (voir [backlog](docs/09-backlog-mvp.md)) : packaging signé (SmartScreen), stabilisation du job E2E desktop natif sur le runner, documentation utilisateur de prise en main.
 
 ### Développer
 
@@ -77,7 +77,7 @@ git push origin v0.1.0
 
 Le workflow [Release](.github/workflows/release.yml) exécute alors : tests du cœur (gate), contrôle de cohérence tag ↔ version, bundles Windows (**MSI, installeur NSIS, zip portable**), `SHA256SUMS.txt`, puis crée la **GitHub Release** avec notes générées automatiquement.
 
-**Toolchain Windows** : les bundles officiels sont construits par la CI (windows-latest, MSVC). En local, MSVC Build Tools est la voie recommandée pour `mc-desktop`. Sans MSVC, l'hôte `x86_64-pc-windows-gnu` + llvm-mingw suffit pour **développer et tester `mc-core`** (validé : 53 tests — recette outillée : `. .\scripts\dev-env.ps1`) ; la compilation du binaire Tauri en gnu peut échouer selon l'environnement (build scripts volumineux — constaté sur poste durci EDR).
+**Toolchain Windows** : les bundles officiels sont construits par la CI (windows-latest, MSVC). En local, MSVC Build Tools est la voie recommandée pour `mc-desktop`. Sans MSVC, l'hôte `x86_64-pc-windows-gnu` + llvm-mingw suffit pour **développer et tester `mc-core`** (validé : 57 tests — recette outillée : `. .\scripts\dev-env.ps1`) ; la compilation du binaire Tauri en gnu peut échouer selon l'environnement (build scripts volumineux — constaté sur poste durci EDR).
 
 ## Conventions de lecture
 

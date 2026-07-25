@@ -16,7 +16,7 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | F8 | **Éditeur de skills intégré** : édition YAML avec validation JSON-Schema live, exécution des self-tests, diff avant/après publication | M | La page Skills est en lecture seule ; le runner existe |
 | F9 | **Rapport HTML exportable** d'un plan (avant/après, risques, mapping) pour revue d'équipe hors outil | S | Simple templating depuis `plan.json` |
 | F10 | **Onboarding premier lancement** : déclarer un dépôt, choisir IA locale/distante, expliquer les garde-fous | S | Réduit la marche d'entrée |
-| F11 | i18n FR/EN | M | Chaînes à externaliser (UI actuellement 100 % FR en dur) |
+| F11 | ✅ i18n FR/EN | M | **Livré partiel (lot 5)** : scaffold `t()` + dictionnaire FR/EN, langue persistée, bascule ; câblé sur le shell (en-tête, nav, onboarding). Corps de page : externalisation à poursuivre |
 | F12 | Négociation `api-version` Azure DevOps Server (7.1 → 7.0) effective + test on-prem | S | Le connecteur envoie 7.1 fixe |
 
 ## 16.2 Techniques
@@ -28,14 +28,14 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | T3 | **Migrations SQLite versionnées** (`schema_version`) | S | Le schéma v1 en `CREATE IF NOT EXISTS` ne permettra pas d'évoluer proprement |
 | T4 | **Journalisation structurée** (`tracing`) avec redaction branchée sur le subscriber + niveau debug activable dans l'UI | S | La redaction existe, les logs techniques non |
 | T5 | **CI qualité** : clippy + rustfmt (`--check`), `cargo-deny` (licences/advisories), couverture `cargo-llvm-cov` avec gate ≥ 80 % sur plan-engine (DoD §9.2) | S | rustfmt/clippy absents du poste local (profil minimal) mais triviaux en CI |
-| T6 | **Tests de propriétés** (proptest) sur `compile()` du plan : séquences d'opérations aléatoires → invariants (§15.4) | M | Complète les 30 tests exemple-par-exemple |
-| T7 | **E2E desktop** via tauri-driver/WebDriver sur le runner Windows | L | Dernier trou de la stratégie de tests MVP |
+| T6 | ✅ **Tests de propriétés** (proptest) sur `compile()` du plan : séquences d'opérations aléatoires → invariants (§15.4) | M | **Livré (lot 5)** : 400 cas — jamais de panic, invariants leaders/commits/reword-only |
+| T7 | ✅ **E2E desktop** via tauri-driver/WebDriver sur le runner Windows | L | **Livré (lot 5)** : E2E Playwright (web/mock, job CI à chaque push) + harnais natif tauri-driver (`e2e-native/`, job `workflow_dispatch` expérimental) |
 | T8 | **Signature des binaires** (Azure Trusted Signing ou certificat OV) + `tauri-plugin-updater` signé | M | Bundles actuellement non signés → SmartScreen ; prérequis à une distribution large |
 | T9 | Durcir la **CSP** (supprimer `unsafe-inline` styles) et ajouter un audit `cargo auditable`/SBOM | S | Aligné avec la pratique mister-doc (CSP hash) |
-| T10 | **Merges dans le segment** : support `--rebase-merges` + rapport de conflits par fichier | L | MVP refuse les merges (garde-fou explicite) ; V2-GIT-3 |
+| T10 | ✅ **Merges dans le segment** (partiel) : rapport de conflits par fichier | L | **Livré partiel (lot 5)** : `reword_dag` réécrit les MESSAGES à travers un merge (topologie/arbres préservés) ; le sequencer liste les fichiers en conflit. Changements de structure à travers un merge : toujours refusés (sûreté). `--rebase-merges` complet : reporté |
 | T11 | **Streaming des réponses IA** + retry/backoff + budget de tokens par lot | M | UX d'attente sur groupes nombreux |
 | T12 | Script `scripts/dev-env.ps1` qui configure la toolchain windows-gnu locale (PATH/CC/AR, recette documentée) | S | Pour contributeurs sans MSVC ; la recette existe en mémoire de session, pas dans le dépôt |
-| T13 | Cache d'analyse incrémental par SHA + virtualisation des longues listes | M | Confort au-delà de ~500 commits (cap actuel) |
+| T13 | ✅ Cache d'analyse incrémental par SHA + virtualisation des longues listes | M | **Livré (lot 5)** : cache `CommitInfo` par SHA (`on_remote` recalculé hors cache) ; virtualisation de la vue graphe au-delà de 150 commits |
 
 ## 16.3 Harmonisation UX/UI
 
@@ -44,7 +44,7 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 | # | Proposition | Effort | Constat actuel |
 |---|---|---|---|
 | U1 | **Design tokens centralisés** : palette sémantique unique (teal=action, rose=destructif, amber=attention, sky=information, violet=IA), échelles d'espacement et de tailles d'icônes (14/16/20) | S | Classes Tailwind ad hoc répétées ; tailles d'icônes 13→16 au hasard |
-| U2 | **Mode clair + bascule persistée** | M | `color-scheme: dark` forcé ; thème sombre uniquement |
+| U2 | ✅ **Mode clair + bascule persistée** | M | **Livré (lot 5)** : thème sombre/clair/système persisté ; le clair inverse l'échelle `slate` via les variables CSS de Tailwind 4 (tout le chrome bascule) |
 | U3 | **Modal unique accessible** (focus-trap, Échap, aria) réutilisé partout | S | Deux modals maison divergents (consentement IA, suppression CI) ; pattern `ConfirmProvider/useConfirm` déjà éprouvé sur mister-doc |
 | U4 | **Composant « confirmation par saisie du nom »** unifié | S | Deux implémentations différentes (input inline pour la branche partagée, modal pour le run CI) pour le même concept de sécurité |
 | U5 | **Toasts non bloquants** (succès/erreur) + états de chargement homogènes (boutons `loading`, skeletons) | S | Les succès sont silencieux ; `busy` booléen unique par page |
@@ -60,7 +60,7 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 
 1. **Quick wins immédiats (≈ 1 semaine)** : T1 (erreurs typées — débloque U3/U4 proprement), U1, U3, U4, U5, U7, U8, U10, U11, F5, T3, T5, T12.
 2. **Structurants (≈ 1 sprint)** : F2 (reorder UI), F3 (diff), T2 (progression/annulation), U6, U9, F8, F9, F10, T4, T11.
-3. **Ambitieux / V2** : ~~F1 (graphe)~~ ✅, ~~F4 (push assisté)~~ ✅, F7 (masse CI), T6, T7 (E2E), T8 (signature), T10 (merges), U2, F11, T13.
+3. **Ambitieux / V2** : ~~F1 (graphe)~~ ✅, ~~F4 (push assisté)~~ ✅, ~~T6~~ ✅, ~~T7 (E2E)~~ ✅, ~~T10 (merges, partiel)~~ ✅, ~~T13~~ ✅, ~~U2~~ ✅, ~~F11 (partiel)~~ ✅ · **restant** : F7 (masse CI), T8 (signature), T9 (CSP/SBOM), T10 complet (`--rebase-merges`), U12 (raccourcis), F11 (corps de page).
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
 
@@ -125,3 +125,23 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > force-with-lease confirmé par saisie → succès).
 > **Reste au backlog V2** : F7 (masse CI), T7 (E2E tauri-driver), T8 (signature), T10 (merges
 > réécrivables), U2 (thème clair), F11 (i18n), T6/T13.
+
+> **Lot 5 livré le 2026-07-25** : T6 — **proptest** sur `compile()` (400 cas : jamais de panic ;
+> invariants leaders distincts, chaque commit au plus une fois, reword-only ⇒ structure et
+> ordre préservés). T13 — **cache d'analyse par SHA** (parties SHA-invariantes de `CommitInfo` ;
+> `on_remote`, contextuel, toujours recalculé hors cache) + **virtualisation** de la vue graphe
+> au-delà de 150 commits. T10 **partiel** — `reword_dag` généralise la réécriture de messages à
+> un DAG : un segment contenant un **merge** est réécrivable (topologie et arbres préservés,
+> aucun conflit possible) ; les changements de structure à travers un merge restent refusés
+> (sûreté) ; le sequencer **liste les fichiers en conflit**. U2 — **thème clair/sombre/système**
+> persisté ; le clair **inverse l'échelle `slate`** via les variables `--color-slate-*` de
+> Tailwind 4 (tout le chrome bascule sans réécrire une classe). F11 **partiel** — scaffold i18n
+> FR/EN (`t()`, dictionnaire, langue persistée, bascule) câblé sur le shell (en-tête, nav,
+> onboarding) ; corps de page à externaliser. T7 — **E2E** : Playwright sur le build web/mock
+> (job CI à chaque push : shell, thème, i18n, graphe) + harnais **desktop natif** tauri-driver
+> (`e2e-native/`, job `workflow_dispatch` expérimental).
+> Vérifié : **57 tests cœur verts** (proptest, reword-merge/refus, cache/on_remote) ; parcours
+> navigateur (thème clair inversé + retour sombre, bascule FR↔EN, persistance) ; E2E Playwright
+> validés par la CI ubuntu (Chromium bloqué localement par l'EDR, comme le binaire Tauri).
+> **Reste au backlog V2** : F7 (masse CI), T8 (signature), T9 (CSP/SBOM), T10 complet
+> (`--rebase-merges`), U12 (raccourcis), F11 (corps de page).
