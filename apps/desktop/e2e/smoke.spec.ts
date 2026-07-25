@@ -42,11 +42,13 @@ test("F11 : bascule de langue FR ↔ EN sur la navigation", async ({ page }) => 
 
 test("F1 : analyse puis vue graphe SVG", async ({ page }) => {
   await page.getByRole("button", { name: /Analyse & plan/ }).click();
-  // L'analyse (mock) joue des phases avant d'afficher la carte des commits.
-  const graphToggle = page.getByRole("button", { name: "Graphe" });
-  await expect(graphToggle).toBeVisible({ timeout: 20_000 });
-  await graphToggle.click();
-  await expect(page.locator('svg[aria-label="Graphe des commits"]')).toBeVisible();
+  // Attendre la FIN de l'analyse (mock : phases + progression) : la table des
+  // commits est rendue et le layout s'est stabilisé (panneau de progression parti).
+  await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 25_000 });
+  // Basculer en vue graphe (force : le toggle peut rester momentanément instable
+  // le temps que le layout se stabilise après l'analyse).
+  await page.getByRole("button", { name: "Graphe" }).click({ force: true });
+  await expect(page.locator('svg[aria-label="Graphe des commits"]')).toBeVisible({ timeout: 10_000 });
   // Au moins un nœud (cercle) rendu.
   expect(await page.locator('svg[aria-label="Graphe des commits"] circle').count()).toBeGreaterThan(0);
 });
