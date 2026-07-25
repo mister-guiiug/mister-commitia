@@ -392,6 +392,50 @@ impl PlanEngine {
         ctx.step("compilation du plan", 0, None)?;
         let compiled = compile(&segment, &plan.ops)?;
 
+        // A2 : garde-fou de gouvernance — une FUSION (squash/fixup) ne doit pas
+        // faire disparaître un trailer PROTÉGÉ porté par un commit absorbé (la
+        // skill IA les reporte, mais une fusion composée à la main pourrait
+        // perdre un Signed-off-by en silence). On refuse avec un message clair.
+        for g in &compiled.groups {
+            if g.fixups.is_empty() {
+                continue;
+            }
+            let mut required: Vec<(String, String)> = Vec::new();
+            for oid in std::iter::once(g.leader).chain(g.fixups.iter().copied()) {
+                let c = repo.find_commit(oid)?;
+                for (k, v) in GitEngine::parse_trailers(c.message().unwrap_or("")) {
+                    let protected = repo_ref
+                        .governance
+                        .protected_trailers
+                        .iter()
+                        .any(|p| p.eq_ignore_ascii_case(&k));
+                    if protected && !required.iter().any(|(rk, rv)| *rk == k && *rv == v) {
+                        required.push((k, v));
+                    }
+                }
+            }
+            if required.is_empty() {
+                continue;
+            }
+            let final_msg = match compiled.messages.get(&g.leader) {
+                Some(m) => m.clone(),
+                None => repo
+                    .find_commit(g.leader)?
+                    .message()
+                    .unwrap_or("")
+                    .to_string(),
+            };
+            let final_trailers = GitEngine::parse_trailers(&final_msg);
+            for (k, v) in &required {
+                if !final_trailers.iter().any(|(fk, fv)| fk == k && fv == v) {
+                    return Err(CoreError::Refused(format!(
+                        "trailer protégé « {k}: {v} » (porté par un commit fusionné) absent du \
+                         message final : l'ajouter au message de fusion, ou retirer ce commit du groupe"
+                    )));
+                }
+            }
+        }
+
         let (final_tip, mapping) = if !compiled.structure_changed {
             let (new_tip, map) = if has_merge {
                 rewrite::reword_dag(repo, base, tip, &compiled.messages, ctx)?

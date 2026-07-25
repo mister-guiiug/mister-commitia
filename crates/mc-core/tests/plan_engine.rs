@@ -913,6 +913,52 @@ fn risk_report_flags_shared_and_drops() {
     assert_eq!(get("branche").verdict, "ok");
 }
 
+/// A2 : une fusion (squash) qui ferait DISPARAÎTRE un trailer protégé porté par
+/// un commit absorbé est refusée au dry-run ; la même fusion en reportant le
+/// trailer dans le message final est acceptée. (c4 de la fixture porte un
+/// Signed-off-by, protégé par défaut.)
+#[test]
+fn a2_squash_must_preserve_protected_trailers() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+
+    // Squash c3+c4 SANS reporter le Signed-off-by de c4 → refusé.
+    let plan = core.plan_new(&repo_id, "feature/checkout").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Squash {
+                    targets: vec![shas[2].to_string(), shas[3].to_string()],
+                    new_message: "feat(pay): combine".into(),
+                },
+            )],
+        )
+        .unwrap();
+    let err = core.plan_dry_run(&plan.id).unwrap_err().to_string();
+    assert!(err.contains("trailer protégé"), "{err}");
+    assert!(err.contains("Signed-off-by"), "{err}");
+
+    // La même fusion en reportant le trailer → acceptée.
+    let plan = core.plan_new(&repo_id, "feature/checkout").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Squash {
+                    targets: vec![shas[2].to_string(), shas[3].to_string()],
+                    new_message: "feat(pay): combine\n\nSigned-off-by: Jane Doe <jane@example.org>"
+                        .into(),
+                },
+            )],
+        )
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(plan.status, PlanStatus::DryRunOk);
+}
+
 proptest! {
     // A1 : proptest sur les OPÉRATIONS GIT RÉELLES (au-delà du compilateur pur).
     // Sur un dépôt linéaire synthétique, un plan aléatoire (reword/drop/reorder)
