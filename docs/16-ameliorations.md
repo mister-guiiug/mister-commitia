@@ -32,7 +32,7 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | T7 | ✅ **E2E desktop** via tauri-driver/WebDriver sur le runner Windows | L | **Livré (lot 5)** : E2E Playwright (web/mock, job CI à chaque push) + harnais natif tauri-driver (`e2e-native/`, job `workflow_dispatch` expérimental) |
 | T8 | ✅ **Signature des binaires** (Azure Trusted Signing ou certificat OV) | M | **Livré partiel (lot 7)** : étape de signature Authenticode dans `release.yml` conditionnée à un secret certificat (signe MSI/NSIS/exe + horodatage), sinon avertissement « non signé ». Non vérifiable sans certificat ; `tauri-plugin-updater` signé : reporté (keypair) |
 | T9 | ✅ Durcir la **CSP** + SBOM | S | **Livré (lot 7)** : CSP durcie (`object-src 'none'`, `base-uri 'self'`, `frame-src/frame-ancestors 'none'`, `script-src 'self'`) — `style-src 'unsafe-inline'` conservé (styles React inline) ; **SBOM CycloneDX** généré en CI (artefact) |
-| T10 | ✅ **Merges dans le segment** (partiel) : rapport de conflits par fichier | L | **Livré partiel (lot 5)** : `reword_dag` réécrit les MESSAGES à travers un merge (topologie/arbres préservés) ; le sequencer liste les fichiers en conflit. Changements de structure à travers un merge : toujours refusés (sûreté). `--rebase-merges` complet : reporté |
+| T10 | ✅ **Merges dans le segment** (complet) : rapport de conflits par fichier | L | **Livré (lots 5 & 9)** : `reword_dag` réécrit les MESSAGES à travers un merge ; **lot 9 — changements de STRUCTURE à travers un merge** (`sequencer_rebase_merges` via `git rebase -i --rebase-merges` : capture de la todo git, transformation des seules lignes `pick`, rejeu ; hook `post-rewrite` pour la carte des SHA ; git valide le placement des fixup → todo invalide = abandon propre). Restent refusés : réordonnancement et opérations ciblant un commit de merge (topologie ambiguë) |
 | T11 | ✅ **Streaming des réponses IA** + retry/backoff + budget de tokens par lot | M | **Livré (lot 3)** : SSE/NDJSON relayés en direct, backoff plafonné `Retry-After`, budget 256..1024/groupe |
 | T12 | ✅ Script `scripts/dev-env.ps1` qui configure la toolchain windows-gnu locale (PATH/CC/AR, recette documentée) | S | **Livré (lot 1)** : recette versionnée (BOM UTF-8 + PATH `dlltool-only`) |
 | T13 | ✅ Cache d'analyse incrémental par SHA + virtualisation des longues listes | M | **Livré (lot 5)** : cache `CommitInfo` par SHA (`on_remote` recalculé hors cache) ; virtualisation de la vue graphe au-delà de 150 commits |
@@ -60,7 +60,7 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 
 1. **Quick wins immédiats (≈ 1 semaine)** — ✅ **tous livrés** : ~~T1~~, ~~U1~~, ~~U3~~, ~~U4~~, ~~U5~~, ~~U7~~, ~~U8~~, ~~U10~~, ~~U11~~, ~~F5~~, ~~T3~~, ~~T5~~ (couverture incluse), ~~T12~~.
 2. **Structurants (≈ 1 sprint)** — ✅ **tous livrés** : ~~F2 (reorder UI)~~, ~~F3 (diff)~~, ~~T2 (progression/annulation)~~, ~~U6~~, ~~U9~~, ~~F8~~, ~~F9~~, ~~F10~~, ~~T4~~, ~~T11~~.
-3. **Ambitieux / V2** — ✅ **livrés** : ~~F1 (graphe)~~, ~~F4 (push assisté)~~, ~~T6~~, ~~T7 (E2E)~~, ~~T10 (merges, partiel)~~, ~~T13~~, ~~U2~~, ~~F11 (i18n)~~, ~~F7 (masse CI + purge)~~, ~~T8 (signature, scaffold)~~, ~~T9 (CSP/SBOM)~~, ~~U12 (raccourcis)~~, ~~F6 (base du segment)~~, ~~F12 (api-version AzDO)~~ · **restant (2 items)** : **T10 complet** (`--rebase-merges` : réécrire la *structure* à travers un merge, pas seulement les messages) et **`tauri-plugin-updater` signé** (auto-update ; nécessite un keypair minisign).
+3. **Ambitieux / V2** — ✅ **livrés** : ~~F1 (graphe)~~, ~~F4 (push assisté)~~, ~~T6~~, ~~T7 (E2E)~~, ~~T10 (merges, partiel)~~, ~~T13~~, ~~U2~~, ~~F11 (i18n)~~, ~~F7 (masse CI + purge)~~, ~~T8 (signature, scaffold)~~, ~~T9 (CSP/SBOM)~~, ~~U12 (raccourcis)~~, ~~F6 (base du segment)~~, ~~F12 (api-version AzDO)~~, ~~T10 complet (`--rebase-merges`)~~ · **restant (1 item)** : **`tauri-plugin-updater` signé** (auto-update ; nécessite un keypair minisign généré par `tauri signer generate`, indisponible/intestable sur ce poste durci EDR — reporté plutôt que livré à l'aveugle).
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
 
@@ -189,3 +189,17 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > touchent des zones non vérifiables localement (moteur de réécriture safety-critical sans
 > toolchain git locale ; outillage de signature indisponible) : ils sont reportés plutôt
 > que livrés à l'aveugle.
+
+> **Lot 9 livré le 2026-07-25** (T10 complet, après restauration de la toolchain locale) :
+> la toolchain llvm-mingw a été re-téléchargée/extraite (recette `dev-env.ps1`) pour
+> retrouver une boucle `cargo test -p mc-core` locale — indispensable pour valider un
+> changement du moteur de réécriture SANS itérer à l'aveugle. **T10 complet** :
+> `sequencer_rebase_merges` autorise les changements de STRUCTURE (squash/fixup/drop de
+> commits non-merge) à travers un segment contenant un merge, via
+> `git rebase -i --rebase-merges` : on capture la todo générée par git (elle encode la
+> topologie), on ne transforme que les lignes `pick`, on rejoue ; c'est git qui valide le
+> placement (todo invalide → abandon propre, rien écrit). Carte des SHA via hook
+> `post-rewrite`, messages via `reword_dag`. Refus conservés : réordonnancement et
+> opérations sur un commit de merge. **Vérifié localement (dry-run réel sur dépôt à merge)
+> puis en CI : 62 tests cœur verts.** Seul résidu V2 : `tauri-plugin-updater` signé
+> (keypair minisign indisponible sur ce poste).
