@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  FlaskConical, FolderGit2, GitBranch, GitCommitHorizontal, ScrollText, Server, Settings2, ShieldCheck, Sparkles,
+  FlaskConical, FolderGit2, GitBranch, GitCommitHorizontal, Languages, Monitor, Moon, ScrollText,
+  Server, Settings2, ShieldCheck, Sparkles, Sun,
 } from "lucide-react";
 import { call, isMock } from "./ipc";
-import { Badge, Button, ICON_MD, Modal, ToastProvider } from "./ui";
+import { t, setLang, useLang } from "./i18n";
+import { setTheme, useTheme, type Theme } from "./theme";
+import { Badge, Button, ICON_MD, ICON_SM, Modal, ToastProvider } from "./ui";
 import type { RepoRef } from "./types";
 import ReposPage from "./pages/Repos";
 import AnalyzePage from "./pages/Analyze";
@@ -14,16 +17,50 @@ import AuditPage from "./pages/Audit";
 
 type Tab = "repos" | "analyze" | "ci" | "skills" | "settings" | "audit";
 
-const tabs: { id: Tab; label: string; icon: typeof FolderGit2 }[] = [
-  { id: "repos", label: "Dépôts", icon: FolderGit2 },
-  { id: "analyze", label: "Analyse & plan", icon: GitCommitHorizontal },
-  { id: "ci", label: "CI/CD", icon: Server },
-  { id: "skills", label: "Skills", icon: Sparkles },
-  { id: "settings", label: "Réglages", icon: Settings2 },
-  { id: "audit", label: "Journal", icon: ScrollText },
+const tabs: { id: Tab; key: string; icon: typeof FolderGit2 }[] = [
+  { id: "repos", key: "nav.repos", icon: FolderGit2 },
+  { id: "analyze", key: "nav.analyze", icon: GitCommitHorizontal },
+  { id: "ci", key: "nav.ci", icon: Server },
+  { id: "skills", key: "nav.skills", icon: Sparkles },
+  { id: "settings", key: "nav.settings", icon: Settings2 },
+  { id: "audit", key: "nav.audit", icon: ScrollText },
 ];
 
+/// Contrôles globaux (U2 + F11) : bascule thème (sombre/clair/système) et langue.
+function ShellControls() {
+  const theme = useTheme();
+  const lang = useLang();
+  const order: Theme[] = ["dark", "light", "system"];
+  const icons = { dark: Moon, light: Sun, system: Monitor } as const;
+  const Icon = icons[theme];
+  const ctl =
+    "inline-flex items-center gap-1 rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800";
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        title={t("controls.theme")}
+        aria-label={t("controls.theme")}
+        onClick={() => setTheme(order[(order.indexOf(theme) + 1) % order.length])}
+        className={ctl}
+      >
+        <Icon size={ICON_SM} /> {t(`theme.${theme}`)}
+      </button>
+      <button
+        type="button"
+        title={t("controls.lang")}
+        aria-label={t("controls.lang")}
+        onClick={() => setLang(lang === "fr" ? "en" : "fr")}
+        className={ctl}
+      >
+        <Languages size={ICON_SM} /> {lang.toUpperCase()}
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
+  useLang(); // re-render sur changement de langue
   const [tab, setTab] = useState<Tab>("repos");
   const [repos, setRepos] = useState<RepoRef[]>([]);
   const [selected, setSelected] = useState<RepoRef | null>(null);
@@ -59,26 +96,29 @@ export default function App() {
             <span className="flex items-center gap-2 text-xs text-slate-400">
               <GitBranch size={ICON_MD} className="text-slate-500" />
               <span className="font-medium text-slate-200">{selected.name}</span>
-              <span>· défaut&nbsp;: <code>{selected.default_branch ?? "?"}</code></span>
+              <span>· {t("header.default")}&nbsp;: <code>{selected.default_branch ?? "?"}</code></span>
               {selected.governance.ai_attribution_policy === "keep-required" ? (
-                <Badge tone="sky">traçabilité IA exigée</Badge>
+                <Badge tone="sky">{t("header.aiRequired")}</Badge>
               ) : (
-                <Badge tone="violet">normalisation autorisée</Badge>
+                <Badge tone="violet">{t("header.aiAllowed")}</Badge>
               )}
             </span>
           ) : (
-            <span className="text-xs text-slate-500">aucun dépôt sélectionné</span>
+            <span className="text-xs text-slate-500">{t("header.noRepo")}</span>
           )}
-          <span className="ml-auto flex items-center gap-1.5 text-[11px] text-slate-600">
-            <ShieldCheck size={ICON_MD} className="text-slate-600" />
-            dry-run &amp; backup obligatoires
-          </span>
+          <div className="ml-auto flex items-center gap-3">
+            <ShellControls />
+            <span className="hidden items-center gap-1.5 text-[11px] text-slate-600 lg:flex">
+              <ShieldCheck size={ICON_MD} className="text-slate-600" />
+              {t("header.guardrails")}
+            </span>
+          </div>
         </header>
 
         <div className="flex min-h-0 flex-1">
           <aside className="flex w-56 shrink-0 flex-col border-r border-slate-800 bg-slate-950">
-            <nav className="flex-1 space-y-0.5 p-2" aria-label="Navigation principale">
-              {tabs.map(({ id, label, icon: Icon }) => (
+            <nav className="flex-1 space-y-0.5 p-2" aria-label={t("nav.aria")}>
+              {tabs.map(({ id, key, icon: Icon }) => (
                 <button
                   key={id}
                   onClick={() => setTab(id)}
@@ -89,18 +129,18 @@ export default function App() {
                       : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"
                   }`}
                 >
-                  <Icon size={ICON_MD} /> {label}
+                  <Icon size={ICON_MD} /> {t(key)}
                 </button>
               ))}
             </nav>
             {isMock && (
               <div className="m-2 flex items-center gap-2 rounded border border-violet-800 bg-violet-950/40 px-2.5 py-2 text-[11px] text-violet-300">
                 <FlaskConical size={ICON_MD} className="shrink-0" />
-                Mode démonstration navigateur — données factices, aucun dépôt réel.
+                {t("mock.banner")}
               </div>
             )}
             <div className="border-t border-slate-800 px-4 py-2 text-[11px] text-slate-600">
-              MVP 0.1.0 — lot 2
+              MVP 0.1.0 — lot 5
             </div>
           </aside>
 
@@ -142,13 +182,13 @@ export default function App() {
 
       {onboarding && (
         <Modal
-          title="Bienvenue dans mister-commitia"
+          title={t("onboarding.title")}
           tone="sky"
           width={620}
           onClose={closeOnboarding}
           footer={
             <>
-              <Button onClick={closeOnboarding}>Plus tard</Button>
+              <Button onClick={closeOnboarding}>{t("onboarding.later")}</Button>
               <Button
                 kind="primary"
                 onClick={() => {
@@ -156,29 +196,23 @@ export default function App() {
                   setTab("repos");
                 }}
               >
-                Déclarer un dépôt
+                {t("onboarding.declare")}
               </Button>
             </>
           }
         >
           <ol className="list-inside list-decimal space-y-2 text-sm text-slate-300">
             <li>
-              <b>Déclarer un dépôt Git local</b> — l'analyse est 100&nbsp;% locale (mode offline),
-              rien ne sort de votre poste sans consentement explicite.
+              <b>{t("onboarding.step1.b")}</b>{t("onboarding.step1.t")}
             </li>
             <li>
-              <b>Choisir l'assistance IA</b> (Réglages)&nbsp;: assistant local déterministe par défaut,
-              Ollama en local, ou endpoint d'entreprise — l'IA <i>propose</i>, vous <i>disposez</i>.
+              <b>{t("onboarding.step2.b")}</b>{t("onboarding.step2.t")}
             </li>
             <li>
-              <b>Comprendre les garde-fous</b>&nbsp;: branches protégées bloquées, dry-run obligatoire,
-              backup automatique avant toute écriture, rollback en un clic, journal d'audit local.
+              <b>{t("onboarding.step3.b")}</b>{t("onboarding.step3.t")}
             </li>
           </ol>
-          <p className="mt-3 text-xs text-slate-400">
-            Côté CI/CD&nbsp;: inventaire, politique de rétention, <b>simulation obligatoire</b> avant
-            toute suppression — les runs sous retention lease ne sont jamais touchés.
-          </p>
+          <p className="mt-3 text-xs text-slate-400">{t("onboarding.ci")}</p>
         </Modal>
       )}
     </ToastProvider>

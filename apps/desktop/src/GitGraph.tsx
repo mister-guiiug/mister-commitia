@@ -1,7 +1,9 @@
 // Vue graphe de l'historique (F1) : rendu SVG des lanes calculées par le cœur,
 // aligné avec une colonne de libellés (sha, sujet, auteur). Lecture seule —
 // reflète la topologie git réelle (indépendante d'un réordonnancement proposé).
+// T13 : au-delà d'un seuil, seule la fenêtre visible est rendue (virtualisation).
 
+import { useState } from "react";
 import type { CommitGraph, CommitInfo } from "./types";
 import { Badge, shaCls } from "./ui";
 
@@ -12,24 +14,39 @@ const ROW_H = 34;
 const LANE_W = 22;
 const PAD = 14;
 const R = 5;
+// Au-delà de ce nombre de commits, on fenêtre le rendu ; sinon rendu complet.
+const VIRTUAL_THRESHOLD = 150;
+const VIEW_H = 560;
+// Marge de rendu au-dessus de la fenêtre pour les arêtes entrantes (edges courts).
+const EDGE_LOOKBACK = 40;
 
 export default function GitGraph({
   graph, commits, onSelect,
 }: {
   graph: CommitGraph; commits: CommitInfo[]; onSelect: (c: CommitInfo) => void;
 }) {
+  const [scrollTop, setScrollTop] = useState(0);
   const bySha = new Map(commits.map((c) => [c.sha, c]));
   const nodeBySha = new Map(graph.nodes.map((n) => [n.sha, n]));
   const cx = (lane: number) => PAD + lane * LANE_W;
   const cy = (row: number) => row * ROW_H + ROW_H / 2;
   const gutterW = PAD * 2 + Math.max(0, graph.lanes - 1) * LANE_W;
-  const height = graph.nodes.length * ROW_H;
+  const total = graph.nodes.length;
+  const height = total * ROW_H;
 
-  return (
+  const virtualize = total > VIRTUAL_THRESHOLD;
+  const start = virtualize ? Math.max(0, Math.floor(scrollTop / ROW_H) - 4) : 0;
+  const end = virtualize ? Math.min(total, Math.ceil((scrollTop + VIEW_H) / ROW_H) + 4) : total;
+  const drawStart = virtualize ? Math.max(0, start - EDGE_LOOKBACK) : 0;
+
+  const labelRows = graph.nodes.slice(start, end);
+  const svgNodes = graph.nodes.slice(drawStart, end);
+
+  const body = (
     <div className="flex overflow-x-auto">
       <svg width={gutterW} height={height} className="shrink-0" role="img" aria-label="Graphe des commits">
-        {/* Arêtes : d'abord (sous les nœuds). */}
-        {graph.nodes.map((n) =>
+        {/* Arêtes (sous les nœuds). */}
+        {svgNodes.map((n) =>
           n.parents.map((p, i) => {
             const x1 = cx(n.lane);
             const y1 = cy(n.row);
@@ -44,7 +61,7 @@ export default function GitGraph({
                   : `M ${x1} ${y1} C ${x1} ${y1 + ROW_H / 2}, ${x2} ${y2 - ROW_H / 2}, ${x2} ${y2}`;
               return <path key={`${n.sha}-${i}`} d={d} stroke={color} strokeWidth={1.6} fill="none" />;
             }
-            // Parent hors segment : arête-borne (descend vers le bas, tronquée).
+            // Parent hors segment : arête-borne (descend, tronquée).
             const yEnd = y1 + ROW_H * 0.55;
             return (
               <g key={`${n.sha}-b${i}`}>
@@ -61,14 +78,14 @@ export default function GitGraph({
           }),
         )}
         {/* Nœuds par-dessus. */}
-        {graph.nodes.map((n) =>
+        {svgNodes.map((n) =>
           n.is_merge ? (
             <circle
               key={n.sha}
               cx={cx(n.lane)}
               cy={cy(n.row)}
               r={R + 1}
-              fill="#0f172a"
+              fill="var(--color-slate-950)"
               stroke={laneColor(n.lane)}
               strokeWidth={2}
             />
@@ -78,8 +95,10 @@ export default function GitGraph({
         )}
       </svg>
 
-      <div className="min-w-0 flex-1">
-        {graph.nodes.map((n) => {
+      <div className="min-w-0 flex-1" style={{ height }}>
+        {/* Espaceur haut (virtualisation). */}
+        {start > 0 && <div style={{ height: start * ROW_H }} />}
+        {labelRows.map((n) => {
           const c = bySha.get(n.sha);
           return (
             <div
@@ -108,6 +127,16 @@ export default function GitGraph({
           );
         })}
       </div>
+    </div>
+  );
+
+  if (!virtualize) return body;
+  return (
+    <div
+      style={{ maxHeight: VIEW_H, overflowY: "auto" }}
+      onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
+    >
+      {body}
     </div>
   );
 }

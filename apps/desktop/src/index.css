@@ -1,7 +1,30 @@
 @import "tailwindcss";
 
-:root {
+/* Thème sombre par défaut. */
+:root,
+:root[data-theme="dark"] {
   color-scheme: dark;
+}
+
+/* Thème clair (U2) : l'UI n'utilise que l'échelle neutre `slate` pour son
+   chrome (fonds, bordures, textes). Tailwind 4 émet ses utilitaires via des
+   variables `--color-slate-*` ; on INVERSE la rampe sous data-theme="light"
+   (950↔50, 900↔100, …) — tout le chrome bascule sans réécrire une seule
+   classe. Les couleurs d'accent (teal/rose/amber/sky/violet) restent inchangées
+   (chips lisibles, boutons pleins conservés). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-slate-950: oklch(0.984 0.003 247.858); /* ex-50  */
+  --color-slate-900: oklch(0.968 0.007 247.896); /* ex-100 */
+  --color-slate-800: oklch(0.929 0.013 255.508); /* ex-200 */
+  --color-slate-700: oklch(0.869 0.022 252.894); /* ex-300 */
+  --color-slate-600: oklch(0.704 0.04 256.788); /* ex-400 */
+  --color-slate-500: oklch(0.554 0.046 257.417); /* mid    */
+  --color-slate-400: oklch(0.446 0.043 257.281); /* ex-600 */
+  --color-slate-300: oklch(0.372 0.044 257.287); /* ex-700 */
+  --color-slate-200: oklch(0.279 0.041 260.031); /* ex-800 */
+  --color-slate-100: oklch(0.208 0.042 265.755); /* ex-900 */
+  --color-slate-50: oklch(0.129 0.042 264.695); /* ex-950 */
 }
 
 body {
