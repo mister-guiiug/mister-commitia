@@ -53,6 +53,71 @@ fn ca2_analyze_flags_without_side_effects() {
     assert!(f.repo.find_reference("refs/mc/preview").is_err());
 }
 
+/// F6 : choix explicite de la base du segment. La base forcée (branche/tag/SHA)
+/// remplace le merge-base auto ; elle doit être un ancêtre STRICT du sommet.
+#[test]
+fn f6_base_override_selects_segment() {
+    let (f, shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+    let ctx = TaskCtx::noop("scan");
+
+    // Base auto (merge-base main..feature) : 4 commits.
+    let full = core
+        .repo_scan(&repo_id, Some("feature/checkout".into()))
+        .unwrap();
+    assert_eq!(full.commits.len(), 4);
+
+    // Base forcée sur c2 (shas[1]) → segment réduit à {c3, c4} (base exclue).
+    let scoped = core
+        .repo_scan_base(
+            &repo_id,
+            Some("feature/checkout".into()),
+            Some(shas[1].to_string()),
+            &ctx,
+        )
+        .unwrap();
+    assert_eq!(scoped.commits.len(), 2);
+    assert_eq!(scoped.base.as_deref(), Some(shas[1].to_string().as_str()));
+    assert_eq!(scoped.commits[0].sha, shas[2].to_string());
+    assert_eq!(scoped.commits[1].sha, shas[3].to_string());
+
+    // Base == sommet → segment vide, refusé.
+    let err = core
+        .repo_scan_base(
+            &repo_id,
+            Some("feature/checkout".into()),
+            Some(shas[3].to_string()),
+            &ctx,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("segment"), "{err}");
+
+    // Base non ancêtre (commit de la feature vu depuis main) → refusé.
+    let err = core
+        .repo_scan_base(
+            &repo_id,
+            Some("main".into()),
+            Some(shas[3].to_string()),
+            &ctx,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("ancêtre"), "{err}");
+
+    // Référence inconnue → introuvable.
+    let err = core
+        .repo_scan_base(
+            &repo_id,
+            Some("feature/checkout".into()),
+            Some("pas-une-ref".into()),
+            &ctx,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("introuvable"), "{err}");
+}
+
 /// F3 : le diff d'un commit est un patch unifié exploitable.
 #[test]
 fn commit_diff_returns_unified_patch() {

@@ -276,6 +276,20 @@ impl Core {
         branch: Option<String>,
         ctx: &TaskCtx,
     ) -> Result<ScanResult> {
+        self.repo_scan_base(id, branch, None, ctx)
+    }
+
+    /// Comme `repo_scan_with`, mais permet de FORCER la base du segment (F6) :
+    /// `base_ref` (branche, tag ou SHA) remplace le merge-base automatique —
+    /// utile pour les branches empilées où l'on veut analyser au-delà du point
+    /// de divergence par défaut. La base doit être un ancêtre STRICT du sommet.
+    pub fn repo_scan_base(
+        &self,
+        id: &str,
+        branch: Option<String>,
+        base_ref: Option<String>,
+        ctx: &TaskCtx,
+    ) -> Result<ScanResult> {
         let mut r = self.store.repo_get(id)?;
         ctx.step("ouverture du dépôt", 0, None)?;
         let repo = GitEngine::open(&r.local_path)?;
@@ -284,17 +298,35 @@ impl Core {
             .or_else(|| r.default_branch.clone())
             .ok_or_else(|| CoreError::Invalid("aucune branche à analyser".into()))?;
         let tip = GitEngine::branch_tip(&repo, &branch)?;
-        let base = match (&r.default_branch, branch.as_str()) {
-            (Some(d), b) if d != b => {
-                let dt = GitEngine::branch_tip(&repo, d)?;
-                let mb = GitEngine::merge_base(&repo, tip, dt)?;
-                if mb == tip {
-                    None
-                } else {
-                    Some(mb)
+        let base = match base_ref {
+            // F6 : base explicite (branche/tag/SHA). Validée : commit existant,
+            // distinct du sommet, et ancêtre du sommet (sinon segment absurde).
+            Some(spec) => {
+                let b = GitEngine::resolve(&repo, spec.trim())?;
+                if b == tip {
+                    return Err(CoreError::Invalid(
+                        "la base choisie est le sommet lui-même : le segment serait vide".into(),
+                    ));
                 }
+                if !repo.graph_descendant_of(tip, b).unwrap_or(false) {
+                    return Err(CoreError::Invalid(
+                        "la base choisie n'est pas un ancêtre du sommet de la branche".into(),
+                    ));
+                }
+                Some(b)
             }
-            _ => None,
+            None => match (&r.default_branch, branch.as_str()) {
+                (Some(d), b) if d != b => {
+                    let dt = GitEngine::branch_tip(&repo, d)?;
+                    let mb = GitEngine::merge_base(&repo, tip, dt)?;
+                    if mb == tip {
+                        None
+                    } else {
+                        Some(mb)
+                    }
+                }
+                _ => None,
+            },
         };
         // Lecture des commits avec cache par SHA (T13) + progression/annulation.
         let mut oids = GitEngine::segment(&repo, base, tip)?;

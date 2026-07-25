@@ -115,12 +115,13 @@ async fn repo_scan(
     core: tauri::State<'_, ArcCore>,
     id: String,
     branch: Option<String>,
+    base: Option<String>,
     task_id: Option<String>,
 ) -> CmdResult<mc_core::api::ScanResult> {
     let ctx = task_ctx(&app, &tasks, "repo_scan", &task_id);
     let core = core.inner().clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
-        core.repo_scan_with(&id, branch, &ctx).map_err(err)
+        core.repo_scan_base(&id, branch, base, &ctx).map_err(err)
     })
     .await
     .map_err(join_err);

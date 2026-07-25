@@ -86,6 +86,22 @@ impl GitEngine {
         Ok(repo.merge_base(a, b)?)
     }
 
+    /// Résout une spécification (branche, tag, SHA, `HEAD~2`…) en l'OID du
+    /// commit visé (F6 : choix explicite de la base du segment).
+    pub fn resolve(repo: &Repository, spec: &str) -> Result<Oid> {
+        let obj = repo.revparse_single(spec).map_err(|e| {
+            CoreError::NotFound(format!(
+                "référence « {spec} » introuvable : {}",
+                e.message()
+            ))
+        })?;
+        // Pèle jusqu'au commit (déréférence un tag annoté au besoin).
+        let commit = obj.peel(git2::ObjectType::Commit).map_err(|e| {
+            CoreError::Invalid(format!("« {spec} » n'est pas un commit : {}", e.message()))
+        })?;
+        Ok(commit.id())
+    }
+
     /// SHA du segment `base..tip`, du plus ancien au plus récent.
     pub fn segment(repo: &Repository, base: Option<Oid>, tip: Oid) -> Result<Vec<Oid>> {
         let mut walk = repo.revwalk()?;
