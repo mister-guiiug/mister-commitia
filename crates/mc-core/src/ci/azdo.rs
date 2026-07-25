@@ -2,7 +2,7 @@ use base64::Engine as _;
 use serde_json::Value;
 
 use crate::error::{CoreError, Result};
-use crate::model::{CiAccount, CiRun};
+use crate::model::{CiAccount, CiArtifact, CiRun, PrRef};
 use crate::task::TaskCtx;
 
 use super::platform_error;
@@ -20,6 +20,8 @@ use super::platform_error;
 pub struct AzDoCi {
     base: String,
     project: String,
+    /// Dépôt Git du projet (requis pour la détection des PR).
+    repo: Option<String>,
     token: String,
     account_id: String,
     client: reqwest::Client,
@@ -36,6 +38,7 @@ impl AzDoCi {
         Ok(Self {
             base: account.base_url.trim_end_matches('/').to_string(),
             project,
+            repo: account.repo.clone(),
             token,
             account_id: account.id.clone(),
             client: reqwest::Client::builder()
@@ -239,6 +242,101 @@ impl AzDoCi {
                 &headers,
                 &body,
                 "suppression du build Azure DevOps",
+            ));
+        }
+        Ok(())
+    }
+
+    /// PR ACTIVES dont la source est `branch` (parité F4 avec GitHub). Utilise
+    /// l'API Git Pull Requests, filtrée par `sourceRefName`.
+    pub async fn list_open_prs(&self, branch: &str) -> Result<Vec<PrRef>> {
+        let repo = self.repo.as_deref().ok_or_else(|| {
+            CoreError::Invalid("dépôt Azure DevOps manquant : requis pour lister les PR".into())
+        })?;
+        let suffix = format!(
+            "/_apis/git/repositories/{repo}/pullrequests?searchCriteria.status=active\
+             &searchCriteria.sourceRefName=refs/heads/{branch}&api-version={{VER}}"
+        );
+        let (status, headers, body) = self.send(reqwest::Method::GET, &suffix).await?;
+        if !status.is_success() {
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "liste des PR Azure DevOps",
+            ));
+        }
+        let v: Value = serde_json::from_str(&body)?;
+        Ok(v["value"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|p| {
+                        let id = p["pullRequestId"].as_i64().unwrap_or(0);
+                        PrRef {
+                            number: id as u64,
+                            title: p["title"].as_str().unwrap_or("").to_string(),
+                            url: format!(
+                                "{}/{}/_git/{repo}/pullrequest/{id}",
+                                self.base, self.project
+                            ),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Artefacts d'un build (F7). L'`id` renvoyé est le NOM de l'artefact
+    /// (Azure DevOps supprime par nom, pas par identifiant global).
+    pub async fn run_artifacts(&self, run_id: &str) -> Result<Vec<CiArtifact>> {
+        let suffix = format!("/_apis/build/builds/{run_id}/artifacts?api-version={{VER}}");
+        let (status, headers, body) = self.send(reqwest::Method::GET, &suffix).await?;
+        if !status.is_success() {
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "liste des artefacts Azure DevOps",
+            ));
+        }
+        let v: Value = serde_json::from_str(&body)?;
+        Ok(v["value"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|a| {
+                        let name = a["name"].as_str().unwrap_or("(artefact)").to_string();
+                        let size = a["resource"]["properties"]["artifactsize"]
+                            .as_str()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+                        CiArtifact {
+                            id: name.clone(),
+                            name,
+                            size_bytes: size,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Supprime un artefact d'un build par NOM (F7). 404 ⇒ déjà absent.
+    pub async fn delete_artifact(&self, run_id: &str, name: &str) -> Result<()> {
+        let suffix = format!(
+            "/_apis/build/builds/{run_id}/artifacts?artifactName={name}&api-version={{VER}}"
+        );
+        let (status, headers, body) = self.send(reqwest::Method::DELETE, &suffix).await?;
+        if status.as_u16() == 404 {
+            return Ok(());
+        }
+        if !status.is_success() {
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "suppression d'un artefact Azure DevOps",
             ));
         }
         Ok(())

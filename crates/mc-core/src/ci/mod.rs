@@ -50,9 +50,7 @@ impl CiClient {
     pub async fn list_open_prs(&self, branch: &str) -> Result<Vec<PrRef>> {
         match self {
             CiClient::Github(c) => c.list_open_prs(branch).await,
-            CiClient::AzDo(_) => Err(CoreError::Invalid(
-                "détection des PR non implémentée pour Azure DevOps".into(),
-            )),
+            CiClient::AzDo(c) => c.list_open_prs(branch).await,
         }
     }
 
@@ -75,32 +73,31 @@ impl CiClient {
         }
     }
 
-    /// Artefacts d'un run (F7). Azure DevOps n'est pas couvert par ce chemin.
+    /// Artefacts d'un run (F7). Couvert pour GitHub ET Azure DevOps.
     pub async fn run_artifacts(&self, run: &CiRun) -> Result<Vec<CiArtifact>> {
         match self {
             CiClient::Github(c) => c.run_artifacts(&run.run_id).await,
-            CiClient::AzDo(_) => Err(CoreError::Invalid(
-                "purge des artefacts non implémentée pour Azure DevOps".into(),
-            )),
+            CiClient::AzDo(c) => c.run_artifacts(&run.run_id).await,
         }
     }
 
-    /// Supprime un artefact par id (F7).
-    pub async fn delete_artifact(&self, artifact_id: &str) -> Result<()> {
+    /// Supprime un artefact (F7). GitHub adresse par id global (le `run` est
+    /// ignoré) ; Azure DevOps par nom, dans le contexte du build (`run`).
+    pub async fn delete_artifact(&self, run: &CiRun, artifact_id: &str) -> Result<()> {
         match self {
             CiClient::Github(c) => c.delete_artifact(artifact_id).await,
-            CiClient::AzDo(_) => Err(CoreError::Invalid(
-                "purge des artefacts non implémentée pour Azure DevOps".into(),
-            )),
+            CiClient::AzDo(c) => c.delete_artifact(&run.run_id, artifact_id).await,
         }
     }
 
-    /// Supprime les logs d'un run (F7).
+    /// Supprime les logs d'un run (F7). Azure DevOps n'a pas d'endpoint de
+    /// suppression de logs seuls : ses logs suivent le build (supprimer le run).
     pub async fn delete_run_logs(&self, run: &CiRun) -> Result<()> {
         match self {
             CiClient::Github(c) => c.delete_run_logs(&run.run_id).await,
             CiClient::AzDo(_) => Err(CoreError::Invalid(
-                "purge des logs non implémentée pour Azure DevOps".into(),
+                "suppression des logs non supportée par Azure DevOps (les logs suivent le build)"
+                    .into(),
             )),
         }
     }
