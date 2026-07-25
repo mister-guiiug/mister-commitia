@@ -371,6 +371,21 @@ pub fn sequencer_rebase_merges(
         &cap_editor,
         format!("#!/bin/sh\ncp \"$1\" '{}'\nexit 1\n", posix(&captured)),
     )?;
+    // Sur Unix, git n'exécute un hook (post-rewrite) que s'il est exécutable :
+    // sans le bit +x le hook est ignoré silencieusement et la carte des SHA
+    // reste vide. (Sur Windows, git exécute les scripts shell via sa propre
+    // sh, indépendamment des permissions.)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for p in [&hook, &cap_editor] {
+            if let Ok(meta) = std::fs::metadata(p) {
+                let mut perm = meta.permissions();
+                perm.set_mode(0o755);
+                let _ = std::fs::set_permissions(p, perm);
+            }
+        }
+    }
 
     let cleanup = |repo_dir: &Path, wt: &Path, scratch: &Path| {
         let _ = run_git(
