@@ -27,7 +27,7 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | T2 | **Progression + annulation** des opérations longues (dry-run, inventaire) via events/channels Tauri + `spawn_blocking` pour ne pas occuper les workers | M | Aujourd'hui : spinner booléen, pas d'annulation |
 | T3 | **Migrations SQLite versionnées** (`schema_version`) | S | Le schéma v1 en `CREATE IF NOT EXISTS` ne permettra pas d'évoluer proprement |
 | T4 | **Journalisation structurée** (`tracing`) avec redaction branchée sur le subscriber + niveau debug activable dans l'UI | S | La redaction existe, les logs techniques non |
-| T5 | **CI qualité** : clippy + rustfmt (`--check`), `cargo-deny` (licences/advisories), couverture `cargo-llvm-cov` avec gate ≥ 80 % sur plan-engine (DoD §9.2) | S | rustfmt/clippy absents du poste local (profil minimal) mais triviaux en CI |
+| T5 | ✅ **CI qualité** : clippy + rustfmt (`--check`), `cargo-deny` (advisories), couverture `cargo-llvm-cov` avec gate ≥ 80 % sur plan-engine (DoD §9.2) | S | **Livré** (lots 1 & 6) : fmt/clippy/advisories + **job `couverture`** gate plan.rs ≥ 80 % (mesuré : **87,7 %** ; global mc-core 80,5 %) |
 | T6 | ✅ **Tests de propriétés** (proptest) sur `compile()` du plan : séquences d'opérations aléatoires → invariants (§15.4) | M | **Livré (lot 5)** : 400 cas — jamais de panic, invariants leaders/commits/reword-only |
 | T7 | ✅ **E2E desktop** via tauri-driver/WebDriver sur le runner Windows | L | **Livré (lot 5)** : E2E Playwright (web/mock, job CI à chaque push) + harnais natif tauri-driver (`e2e-native/`, job `workflow_dispatch` expérimental) |
 | T8 | **Signature des binaires** (Azure Trusted Signing ou certificat OV) + `tauri-plugin-updater` signé | M | Bundles actuellement non signés → SmartScreen ; prérequis à une distribution large |
@@ -49,17 +49,17 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 | U4 | **Composant « confirmation par saisie du nom »** unifié | S | Deux implémentations différentes (input inline pour la branche partagée, modal pour le run CI) pour le même concept de sécurité |
 | U5 | **Toasts non bloquants** (succès/erreur) + états de chargement homogènes (boutons `loading`, skeletons) | S | Les succès sont silencieux ; `busy` booléen unique par page |
 | U6 | **En-tête global contextuel** : repo/branche sélectionnés visibles partout, sélection de dépôt depuis la barre latérale | M | Le contexte est répété ou absent selon la page ; l'état des pages se perd au changement d'onglet (montage/démontage) → conserver l'état par page |
-| U7 | **Tables harmonisées** : hover, tri (date/taille/statut), SHA en `font-mono` partout, troncature avec infobulle | S | Tables hétérogènes entre Analyse, CI et Journal |
+| U7 | ✅ **Tables harmonisées** : hover, tri, SHA en `font-mono` partout, troncature avec infobulle | S | **Livré** (lots 1 & 6) : classes partagées, hover, SHA mono ; **tri clic-colonne** sur candidats CI **et Journal** |
 | U8 | **Échelle de verdicts unique** ok/attention/bloquant réutilisée par le panneau risques ET le rapport CI (protégés = même sémantique ambre) avec légende commune | S | Deux vocabulaifes visuels pour la même idée |
 | U9 | **Accessibilité** : aria-labels sur les cases de sélection de commits, focus visible, contraste des textes `slate-500` relevé, navigation clavier des listes, `prefers-reduced-motion` | M | Aucun aria sur les checkboxes ; contrastes limites |
 | U10 | **États vides actionnables** : chaque Empty propose l'action suivante (ex. page CI vide → « Ajouter un accès ») ; erreurs réseau avec « Réessayer » | S | Empty informatifs sans action |
-| U11 | **Lexique FR harmonisé** : run/exécution, dépôt/repo, capitalisation des boutons, espaces insécables avant « : » et « ? » | S | Mélanges ponctuels |
+| U11 | ✅ **Lexique FR harmonisé** : capitalisation des boutons, espaces insécables avant « : » et « ? » | S | **Livré** (lots 1 & 6) : libellés principaux + passe sur les écrans secondaires ; plus aucune violation d'espace insécable dans le texte visible |
 | U12 | **Raccourcis clavier** (actualiser, dry-run, naviguer entre onglets) + affichage `?` | M | Aucun raccourci |
 
 ## 16.4 Priorisation proposée
 
-1. **Quick wins immédiats (≈ 1 semaine)** : T1 (erreurs typées — débloque U3/U4 proprement), U1, U3, U4, U5, U7, U8, U10, U11, F5, T3, T5, T12.
-2. **Structurants (≈ 1 sprint)** : F2 (reorder UI), F3 (diff), T2 (progression/annulation), U6, U9, F8, F9, F10, T4, T11.
+1. **Quick wins immédiats (≈ 1 semaine)** — ✅ **tous livrés** : ~~T1~~, ~~U1~~, ~~U3~~, ~~U4~~, ~~U5~~, ~~U7~~, ~~U8~~, ~~U10~~, ~~U11~~, ~~F5~~, ~~T3~~, ~~T5~~ (couverture incluse), ~~T12~~.
+2. **Structurants (≈ 1 sprint)** — ✅ **tous livrés** : ~~F2 (reorder UI)~~, ~~F3 (diff)~~, ~~T2 (progression/annulation)~~, ~~U6~~, ~~U9~~, ~~F8~~, ~~F9~~, ~~F10~~, ~~T4~~, ~~T11~~.
 3. **Ambitieux / V2** : ~~F1 (graphe)~~ ✅, ~~F4 (push assisté)~~ ✅, ~~T6~~ ✅, ~~T7 (E2E)~~ ✅, ~~T10 (merges, partiel)~~ ✅, ~~T13~~ ✅, ~~U2~~ ✅, ~~F11 (partiel)~~ ✅ · **restant** : F7 (masse CI), T8 (signature), T9 (CSP/SBOM), T10 complet (`--rebase-merges`), U12 (raccourcis), F11 (corps de page).
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
@@ -145,3 +145,13 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > validés par la CI ubuntu (Chromium bloqué localement par l'EDR, comme le binaire Tauri).
 > **Reste au backlog V2** : F7 (masse CI), T8 (signature), T9 (CSP/SBOM), T10 complet
 > (`--rebase-merges`), U12 (raccourcis), F11 (corps de page).
+
+> **Lot 6 livré le 2026-07-25** (finalisation des tiers « quick wins » & « structurants ») :
+> T5 — **couverture** en CI (`cargo-llvm-cov`), job dédié qui **gate `plan.rs` à ≥ 80 %**
+> (mesuré : **87,7 %** ; couverture globale mc-core 80,5 %). U7 — **tri clic-colonne du Journal
+> d'audit** (# / catégorie / action / résultat) avec indicateur de sens, harmonisé avec le tri
+> des candidats CI. U11 — passe typographique FR (espaces insécables) sur les écrans secondaires
+> (Réglages, Dépôts) : plus aucune violation dans le texte visible.
+> **Les tiers 1 (quick wins) et 2 (structurants) de la priorisation §16.4 sont désormais
+> intégralement livrés.** Vérifié : CI entièrement verte (dont le job couverture) ; tri du
+> Journal rejoué en navigateur.
