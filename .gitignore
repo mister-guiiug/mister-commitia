@@ -15,3 +15,9 @@ dist/
 *.tsbuildinfo
 bundles/
 apps/desktop/src-tauri/gen/schemas/
+
+# E2E (Playwright + tauri-driver)
+apps/desktop/test-results/
+apps/desktop/playwright-report/
+apps/desktop/blob-report/
+apps/desktop/.playwright/

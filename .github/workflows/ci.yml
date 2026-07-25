@@ -69,6 +69,53 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  e2e-web:
+    name: E2E interface (Playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm ci
+      - name: Navigateurs Playwright
+        run: npx playwright install --with-deps chromium
+      - name: E2E (build web + mock IPC)
+        run: npm run e2e
+
+  # E2E DESKTOP natifs (tauri-driver) — expérimental, à la demande uniquement :
+  # l'app native ne compile pas sur tout poste et la session WebDriver dépend de
+  # l'environnement du runner (msedgedriver/WebView2). Les E2E Playwright ci-dessus
+  # couvrent l'UI à chaque push.
+  e2e-desktop:
+    name: E2E desktop (tauri-driver, expérimental)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build de l'application desktop
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npx tauri build --no-bundle
+      - name: Installer tauri-driver
+        run: cargo install tauri-driver --locked
+      - name: E2E natifs
+        working-directory: apps/desktop/e2e-native
+        run: |
+          npm install
+          npm test
+
   # Les tags v* passent par release.yml (bundles + GitHub Release) ;
   # ce job ne sert qu'aux tests de packaging à la demande.
   bundle-windows:
