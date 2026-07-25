@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUpDown, PlugZap, ShieldAlert, Trash2 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import { useTask } from "../tasks";
-import type { CiAccount, CiKind, CiRun, RetentionPolicy, SimulationReport } from "../types";
+import type { BatchDeleteResult, CiAccount, CiKind, CiRun, RetentionPolicy, SimulationReport } from "../types";
 import {
   Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, Field, ICON_SM, ProgressPanel,
   VerdictBadge, inputCls, trCls, useToast,
@@ -39,6 +39,9 @@ export default function CiPage() {
 
   // Suppression confirmée (composant unifié)
   const [deleting, setDeleting] = useState<CiRun | null>(null);
+  // Suppression EN MASSE (F7) : confirmation + point de reprise.
+  const [batchConfirm, setBatchConfirm] = useState(false);
+  const [batchDone, setBatchDone] = useState<string[]>([]);
 
   const refresh = async () => {
     const [a, p] = await Promise.all([
@@ -152,6 +155,40 @@ export default function CiPage() {
     } catch (e) {
       setError(asIpcError(e).message);
     } finally {
+      setBusy(false);
+    }
+  };
+
+  // F7 : reste à supprimer (hors point de reprise) — c'est le nombre à confirmer.
+  const pending = report ? report.candidates.filter((c) => !batchDone.includes(c.run_id)) : [];
+
+  const doBatch = async (confirm: string) => {
+    if (!report) return;
+    setError(null);
+    setBusy(true);
+    const taskId = task.begin(`Suppression de ${pending.length} run(s)`);
+    try {
+      const res = await call<BatchDeleteResult>("ci_delete_batch", {
+        accountId: account, policyId: policy, runs: report.candidates,
+        confirm, alreadyDone: batchDone, taskId,
+      });
+      // Retire les runs supprimés du rapport ; conserve un point de reprise.
+      setReport((r) => r && { ...r, candidates: r.candidates.filter((c) => !res.deleted.includes(c.run_id)) });
+      const remaining = res.cancelled || res.failed.length > 0;
+      setBatchDone(remaining ? res.deleted : []);
+      setBatchConfirm(false);
+      toast(
+        res.failed.length > 0 ? "error" : res.cancelled ? "info" : "success",
+        res.cancelled
+          ? `Interrompu : ${res.deleted.length} supprimé(s), reprise possible`
+          : `${res.deleted.length} run(s) supprimé(s)` + (res.failed.length ? `, ${res.failed.length} échec(s)` : "") + " — journalisé",
+      );
+    } catch (e) {
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Suppression en masse annulée");
+      else setError(ie.message);
+    } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -311,6 +348,11 @@ export default function CiPage() {
               <Badge tone="teal">{report.kept_recent} conservés (âge / N derniers)</Badge>
               <VerdictBadge verdict="attention" label={`${report.protected.length} protégés`} />
               <VerdictBadge verdict="bloquant" label={`${report.candidates.length} candidats à suppression`} />
+              {pending.length > 0 && (
+                <Button kind="danger" onClick={() => setBatchConfirm(true)} title="Suppression en masse (throttling, reprise, journalisée)">
+                  <Trash2 size={ICON_SM} /> {batchDone.length > 0 ? `Reprendre (${pending.length})` : `Tout supprimer (${pending.length})`}
+                </Button>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -388,6 +430,25 @@ export default function CiPage() {
           busy={busy}
           onConfirm={(typed) => void doDelete(deleting, typed)}
           onClose={() => setDeleting(null)}
+        />
+      )}
+
+      {batchConfirm && report && (
+        <ConfirmTyped
+          title="Suppression en masse des candidats"
+          description={
+            <>
+              <b>{pending.length}</b> run(s) seront supprimés un par un. Chaque suppression est
+              journalisée&nbsp;; les runs en cours ou sous lease restent refusés par le cœur ; le
+              débit est respecté (429/Retry-After) et l'opération est <b>annulable</b> puis
+              reprenable. Saisir le <b>nombre</b> de runs pour confirmer.
+            </>
+          }
+          expected={String(pending.length)}
+          confirmLabel={`Supprimer ${pending.length} run(s)`}
+          busy={busy}
+          onConfirm={(typed) => void doBatch(typed)}
+          onClose={() => setBatchConfirm(false)}
         />
       )}
     </div>

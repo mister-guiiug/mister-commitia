@@ -3,7 +3,7 @@
 // clairement signalé dans l'interface via `isMock`.
 
 import type {
-  AuditEvent, CiAccount, CiRun, CommitGraph, Plan, PlanOp, Proposal, PushPreview,
+  AuditEvent, BatchDeleteResult, CiAccount, CiRun, CommitGraph, Plan, PlanOp, Proposal, PushPreview,
   PushResult, RepoRef, RetentionPolicy, RiskAxis, ScanResult, SimulationReport, SkillMeta,
 } from "./types";
 
@@ -533,6 +533,30 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
       }
       audit("ci_cleanup", "delete", `run ${run.run_id}`);
       return null;
+    }
+    case "ci_delete_batch": {
+      if (!mock.simulated) {
+        throw { code: "refused", message: "refusé : aucune simulation préalable pour ce périmètre : exécuter la simulation d'abord" } satisfies IpcError;
+      }
+      const bruns = (args.runs as CiRun[]) ?? [];
+      const done = new Set<string>((args.alreadyDone as string[]) ?? []);
+      const pendingRuns = bruns.filter((r) => !done.has(r.run_id));
+      const expected = String(pendingRuns.length);
+      if (args.confirm !== expected) {
+        throw { code: "confirm_required", expected, message: `confirmation requise : suppression en masse : saisir exactement « ${expected} » (nombre de runs)` } satisfies IpcError;
+      }
+      const tid = typeof args.taskId === "string" && args.taskId ? args.taskId : null;
+      const deleted = new Set<string>(done);
+      let cancelled = false;
+      for (let i = 0; i < pendingRuns.length; i++) {
+        if (tid && mockCancelled.has(tid)) { cancelled = true; break; }
+        if (tid) emitTask({ task_id: tid, task: "ci_delete_batch", kind: "progress", phase: "suppression des runs", current: i, total: pendingRuns.length });
+        await sleep(200);
+        if (tid && mockCancelled.has(tid)) { cancelled = true; break; }
+        deleted.add(pendingRuns[i].run_id);
+        audit("ci_cleanup", "delete", `run ${pendingRuns[i].run_id}`);
+      }
+      return { total: pendingRuns.length, deleted: [...deleted], failed: [], cancelled } satisfies BatchDeleteResult;
     }
     case "ai_provider_save": {
       const p = { id: id("ai"), kind: String(args.kind), base_url: (args.baseUrl as string) ?? null, model: (args.model as string) ?? null, key_ref: args.apiKey ? "ai:x" : null, is_default: Boolean(args.isDefault) };

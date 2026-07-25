@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  FlaskConical, FolderGit2, GitBranch, GitCommitHorizontal, Languages, Monitor, Moon, ScrollText,
-  Server, Settings2, ShieldCheck, Sparkles, Sun,
+  FlaskConical, FolderGit2, GitBranch, GitCommitHorizontal, Keyboard, Languages, Monitor, Moon,
+  ScrollText, Server, Settings2, ShieldCheck, Sparkles, Sun,
 } from "lucide-react";
 import { call, isMock } from "./ipc";
 import { t, setLang, useLang } from "./i18n";
@@ -26,8 +26,8 @@ const tabs: { id: Tab; key: string; icon: typeof FolderGit2 }[] = [
   { id: "audit", key: "nav.audit", icon: ScrollText },
 ];
 
-/// Contrôles globaux (U2 + F11) : bascule thème (sombre/clair/système) et langue.
-function ShellControls() {
+/// Contrôles globaux (U2 + F11 + U12) : thème, langue, aide des raccourcis.
+function ShellControls({ onShortcuts }: { onShortcuts: () => void }) {
   const theme = useTheme();
   const lang = useLang();
   const order: Theme[] = ["dark", "light", "system"];
@@ -55,6 +55,9 @@ function ShellControls() {
       >
         <Languages size={ICON_SM} /> {lang.toUpperCase()}
       </button>
+      <button type="button" title={t("controls.shortcuts")} aria-label={t("controls.shortcuts")} onClick={onShortcuts} className={ctl}>
+        <Keyboard size={ICON_SM} /> ?
+      </button>
     </div>
   );
 }
@@ -65,6 +68,27 @@ export default function App() {
   const [repos, setRepos] = useState<RepoRef[]>([]);
   const [selected, setSelected] = useState<RepoRef | null>(null);
   const [onboarding, setOnboarding] = useState(false);
+  const [shortcuts, setShortcuts] = useState(false);
+
+  // U12 : raccourcis clavier globaux (ignorés dans les champs de saisie).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable)
+      )
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "?") {
+        setShortcuts((s) => !s);
+      } else if (e.key >= "1" && e.key <= String(tabs.length)) {
+        setTab(tabs[Number(e.key) - 1].id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const refreshRepos = async () => {
     const list = await call<RepoRef[]>("repos_list");
@@ -107,7 +131,7 @@ export default function App() {
             <span className="text-xs text-slate-500">{t("header.noRepo")}</span>
           )}
           <div className="ml-auto flex items-center gap-3">
-            <ShellControls />
+            <ShellControls onShortcuts={() => setShortcuts(true)} />
             <span className="hidden items-center gap-1.5 text-[11px] text-slate-600 lg:flex">
               <ShieldCheck size={ICON_MD} className="text-slate-600" />
               {t("header.guardrails")}
@@ -213,6 +237,26 @@ export default function App() {
             </li>
           </ol>
           <p className="mt-3 text-xs text-slate-400">{t("onboarding.ci")}</p>
+        </Modal>
+      )}
+
+      {shortcuts && (
+        <Modal title={t("shortcuts.title")} tone="sky" width={460} onClose={() => setShortcuts(false)}>
+          <dl className="space-y-2 text-sm text-slate-300">
+            {[
+              ["1 – 6", t("shortcuts.tabs")],
+              ["?", t("shortcuts.help")],
+              ["Échap", t("shortcuts.close")],
+            ].map(([k, label]) => (
+              <div key={k} className="flex items-center gap-3">
+                <kbd className="min-w-16 rounded border border-slate-600 bg-slate-800 px-2 py-0.5 text-center font-mono text-xs text-slate-200">
+                  {k}
+                </kbd>
+                <span>{label}</span>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-3 text-xs text-slate-500">{t("shortcuts.hint")}</p>
         </Modal>
       )}
     </ToastProvider>

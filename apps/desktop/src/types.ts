@@ -222,6 +222,18 @@ export interface SimulationReport {
   scope_hash: string;
 }
 
+export interface BatchFailure {
+  run_id: string;
+  reason: string;
+}
+
+export interface BatchDeleteResult {
+  total: number;
+  deleted: string[];
+  failed: BatchFailure[];
+  cancelled: boolean;
+}
+
 export type AiProviderKind = "rule_based" | "ollama" | "open_ai_compat" | "anthropic";
 
 export interface AiProviderConfig {
