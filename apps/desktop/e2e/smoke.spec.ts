@@ -45,9 +45,11 @@ test("F1 : analyse puis vue graphe SVG", async ({ page }) => {
   // Attendre la FIN de l'analyse (mock : phases + progression) : la table des
   // commits est rendue et le layout s'est stabilisé (panneau de progression parti).
   await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 25_000 });
-  // Basculer en vue graphe (force : le toggle peut rester momentanément instable
-  // le temps que le layout se stabilise après l'analyse).
-  await page.getByRole("button", { name: "Graphe" }).click({ force: true });
+  // Basculer en vue graphe (page stabilisée → clic normal, défilé dans la vue).
+  const graphToggle = page.getByRole("button", { name: "Graphe", exact: true });
+  await graphToggle.scrollIntoViewIfNeeded();
+  await graphToggle.click();
+  await expect(graphToggle).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator('svg[aria-label="Graphe des commits"]')).toBeVisible({ timeout: 10_000 });
   // Au moins un nœud (cercle) rendu.
   expect(await page.locator('svg[aria-label="Graphe des commits"] circle').count()).toBeGreaterThan(0);
