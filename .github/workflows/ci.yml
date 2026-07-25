@@ -99,12 +99,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Installer cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked
-      - name: Générer le SBOM (mc-core)
-        run: cargo cyclonedx -p mc-core --format json
+      - name: Générer le SBOM (espace de travail)
+        # cargo-cyclonedx n'a pas de -p : il ecrit un SBOM adjacent a chaque
+        # Cargo.toml de membre (mc-core, mc-desktop). Nom de fichier selon la
+        # version : bom.json (recent) ou <crate>.cdx.json (ancien).
+        run: cargo cyclonedx --format json
       - uses: actions/upload-artifact@v4
         with:
           name: sbom-cyclonedx
-          path: "**/*.cdx.json"
+          path: |
+            **/bom.json
+            **/*.cdx.json
           if-no-files-found: error
 
   front:
