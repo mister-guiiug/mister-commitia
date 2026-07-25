@@ -11,13 +11,13 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | F3 | ✅ **Diff de contenu par commit** (viewer unifié, tronqué au-delà d'un seuil) | M | **Livré (lot 2)** : `commit_diff(sha)` + visionneuse colorée (tronquée à 200 Ko) |
 | F4 | ✅ **Push assisté post-application** : `--force-with-lease` guidé, checklist de coordination, détection des PR ouvertes via l'API | M | **Livré (lot 4)** : `push_preview`/`push_execute` (bail explicite, garde-fous protégée+confirmation typée, audit avant/après), PR ouvertes via GitHub, panneau UI avec checklist |
 | F5 | ✅ **Import de plan dans l'UI** | S | **Livré (lot 1)** : bouton d'import câblé sur `plan_import` |
-| F6 | **Choix de la base du segment** (autre branche/сommit que le merge-base auto) | S | Utile pour branches empilées |
-| F7 | ✅ **Nettoyage CI en masse** : exécution par lot du rapport de simulation avec throttling, reprise sur checkpoint | L | **Livré (lot 7)** : `ci_delete_batch` (mêmes garde-fous qu'à l'unité, 429/Retry-After → attente annulable, checkpoint des `run_id` pour reprise, progression, audit par run) + UI (bouton « Tout supprimer (N) »/« Reprendre », confirmation par le nombre). Suppression des logs/artifacts : extension future |
+| F6 | ✅ **Choix de la base du segment** (autre branche/commit que le merge-base auto) | S | **Livré (lot 8)** : `repo_scan_base` (base branche/tag/SHA résolue via revparse, validée ancêtre strict du sommet) + champ « base » dans la page Analyse (« appliquer »/« auto ») |
+| F7 | ✅ **Nettoyage CI en masse** : exécution par lot du rapport de simulation avec throttling, reprise sur checkpoint | L | **Livré (lot 7)** : `ci_delete_batch` (mêmes garde-fous qu'à l'unité, 429/Retry-After → attente annulable, checkpoint des `run_id` pour reprise, progression, audit par run) + UI (bouton « Tout supprimer (N) »/« Reprendre », confirmation par le nombre). **Purge logs/artefacts livrée (lot 8)** : `ci_purge_assets` (conserve les runs, GitHub) + action UI « Purger logs + artefacts » |
 | F8 | ✅ **Éditeur de skills intégré** : édition YAML, validation à l'enregistrement, self-tests | M | **Livré (lot 2)** : édition du manifeste (`name` immuable, anti-traversée), éditions journalisées |
 | F9 | ✅ **Rapport HTML exportable** d'un plan (avant/après, risques, mapping) pour revue d'équipe hors outil | S | **Livré (lot 2)** : export HTML autonome depuis le plan |
 | F10 | ✅ **Onboarding premier lancement** : déclarer un dépôt, choisir IA locale/distante, expliquer les garde-fous | S | **Livré (lot 2)** : accueil 3 étapes (localStorage) |
-| F11 | ✅ i18n FR/EN | M | **Livré partiel (lot 5)** : scaffold `t()` + dictionnaire FR/EN, langue persistée, bascule ; câblé sur le shell (en-tête, nav, onboarding). Corps de page : externalisation à poursuivre |
-| F12 | Négociation `api-version` Azure DevOps Server (7.1 → 7.0) effective + test on-prem | S | Le connecteur envoie 7.1 fixe |
+| F11 | ✅ i18n FR/EN | M | **Livré (lots 5 & 8)** : scaffold `t()` + dictionnaire (~180 clés), langue persistée, bascule réactive (`useLang`) ; **corps de page externalisé** — Réglages/Dépôts/Journal/Skills intégralement, CI/Analyse pour tout le chrome (titres, libellés, options, boutons, en-têtes, états vides, titres de modales). Résidu : quelques toasts transitoires interpolés et longues descriptions de modales CI/Analyse restent en FR |
+| F12 | ✅ Négociation `api-version` Azure DevOps Server (7.1 → 7.0) effective + test on-prem | S | **Livré (lot 8)** : helper `send` centralisé qui tente 7.1 puis se rabat sur 7.0 sur un 400 « version hors plage » (mémorisé) ; reprise sûre même en DELETE (rejet = rien exécuté) ; test mockhttp |
 
 ## 16.2 Techniques
 
@@ -60,7 +60,7 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 
 1. **Quick wins immédiats (≈ 1 semaine)** — ✅ **tous livrés** : ~~T1~~, ~~U1~~, ~~U3~~, ~~U4~~, ~~U5~~, ~~U7~~, ~~U8~~, ~~U10~~, ~~U11~~, ~~F5~~, ~~T3~~, ~~T5~~ (couverture incluse), ~~T12~~.
 2. **Structurants (≈ 1 sprint)** — ✅ **tous livrés** : ~~F2 (reorder UI)~~, ~~F3 (diff)~~, ~~T2 (progression/annulation)~~, ~~U6~~, ~~U9~~, ~~F8~~, ~~F9~~, ~~F10~~, ~~T4~~, ~~T11~~.
-3. **Ambitieux / V2** — ✅ **livrés** : ~~F1 (graphe)~~, ~~F4 (push assisté)~~, ~~T6~~, ~~T7 (E2E)~~, ~~T10 (merges, partiel)~~, ~~T13~~, ~~U2~~, ~~F11 (partiel)~~, ~~F7 (masse CI)~~, ~~T8 (signature, scaffold)~~, ~~T9 (CSP/SBOM)~~, ~~U12 (raccourcis)~~ · **restant** : F6 (base du segment), F12 (api-version AzDO), T10 complet (`--rebase-merges`), `tauri-plugin-updater` signé, F11 (corps de page).
+3. **Ambitieux / V2** — ✅ **livrés** : ~~F1 (graphe)~~, ~~F4 (push assisté)~~, ~~T6~~, ~~T7 (E2E)~~, ~~T10 (merges, partiel)~~, ~~T13~~, ~~U2~~, ~~F11 (i18n)~~, ~~F7 (masse CI + purge)~~, ~~T8 (signature, scaffold)~~, ~~T9 (CSP/SBOM)~~, ~~U12 (raccourcis)~~, ~~F6 (base du segment)~~, ~~F12 (api-version AzDO)~~ · **restant (2 items)** : **T10 complet** (`--rebase-merges` : réécrire la *structure* à travers un merge, pas seulement les messages) et **`tauri-plugin-updater` signé** (auto-update ; nécessite un keypair minisign).
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
 
@@ -170,3 +170,22 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > suppression en masse : bouton, confirmation, exécution retirant les candidats).
 > **Reste au backlog V2** : F6, F12, T10 complet (`--rebase-merges`), updater signé,
 > F11 (corps de page), suppression des logs/artifacts CI.
+
+> **Lot 8 livré le 2026-07-25** (les partiels restants + 2 nouveaux) : F6 — **choix
+> explicite de la base du segment** (`repo_scan_base` : base branche/tag/SHA résolue et
+> validée ancêtre strict du sommet ; champ « base » dans Analyse). F12 — **négociation
+> de l'api-version Azure DevOps** (tente 7.1, se rabat sur 7.0 pour un Server on-prem plus
+> ancien, choix mémorisé ; reprise sûre même en DELETE). F7 — **purge des logs/artefacts**
+> (`ci_purge_assets` : reclaim de stockage qui CONSERVE les runs, GitHub, confirmation par
+> le nombre, annulable ; UI dédiée). F11 — **externalisation i18n du corps des pages**
+> (~180 clés, `useLang` réactif ; Réglages/Dépôts/Journal/Skills complets, CI/Analyse pour
+> tout le chrome). Vérifié : **61 tests cœur verts** (F6 base override, F12 négociation,
+> F7 purge) ; bascule FR→EN rejouée au navigateur sur les six pages ; purge et base
+> vérifiées au navigateur.
+> **Reste au backlog V2 (2 items)** : T10 complet (`--rebase-merges`, réécriture de
+> structure à travers un merge) ; `tauri-plugin-updater` signé (auto-update, keypair
+> minisign requis — le poste durci EDR ne permet ni de générer le keypair ni de tester
+> le bundle localement, comme la signature Authenticode gated du lot 7). Ces deux items
+> touchent des zones non vérifiables localement (moteur de réécriture safety-critical sans
+> toolchain git locale ; outillage de signature indisponible) : ils sont reportés plutôt
+> que livrés à l'aveugle.
