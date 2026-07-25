@@ -326,3 +326,207 @@ pub fn sequencer_rebase(
         .collect();
     Ok((new_tip, mapping))
 }
+
+/// Rejoue un segment `base..tip` CONTENANT DES MERGES en appliquant les
+/// changements de structure du plan (drop, fixup/squash de commits NON-merge)
+/// tout en PRÉSERVANT la topologie des merges (T10 complet, `--rebase-merges`).
+///
+/// Stratégie sûre : on laisse git générer sa todo `--rebase-merges` (qui encode
+/// la topologie via `label`/`reset`/`merge`), on la CAPTURE, on ne transforme
+/// QUE les lignes `pick` selon le plan (fixup absorbé → `fixup`, commit
+/// abandonné → ligne retirée ; les lignes `merge`/`label`/`reset` restent
+/// intactes), puis on rejoue. C'est git qui valide le placement des `fixup` :
+/// une todo invalide fait échouer le rebase qui est ABANDONNÉ sans rien écrire.
+/// Un hook `post-rewrite` capture la correspondance ancien→nouveau SHA.
+/// Retourne le nouveau sommet et cette carte (pour la passe de messages).
+pub fn sequencer_rebase_merges(
+    repo: &Repository,
+    base: Oid,
+    tip: Oid,
+    groups: &[TodoGroup],
+    cancel: &CancelToken,
+) -> Result<(Oid, HashMap<Oid, Oid>)> {
+    let repo_dir = repo
+        .workdir()
+        .ok_or_else(|| CoreError::Refused("dépôt bare non supporté".into()))?
+        .to_path_buf();
+
+    let scratch =
+        std::env::temp_dir().join(format!("mc-rebasem-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&scratch)?;
+    let wt = scratch.join("wt");
+    let captured = scratch.join("todo-git.txt");
+    let transformed = scratch.join("todo-mc.txt");
+    let map_file = scratch.join("rewritten.txt");
+    let hooks = scratch.join("hooks");
+    std::fs::create_dir_all(&hooks)?;
+
+    // Hook post-rewrite : reçoit sur stdin les paires « <ancien> <nouveau> ».
+    let hook = hooks.join("post-rewrite");
+    std::fs::write(&hook, format!("#!/bin/sh\ncat >> '{}'\n", posix(&map_file)))?;
+    // Éditeur de PHASE 1 : copie la todo générée par git puis échoue → git
+    // abandonne le rebase avant tout travail (on récupère juste la todo).
+    let cap_editor = scratch.join("capture.sh");
+    std::fs::write(
+        &cap_editor,
+        format!("#!/bin/sh\ncp \"$1\" '{}'\nexit 1\n", posix(&captured)),
+    )?;
+
+    let cleanup = |repo_dir: &Path, wt: &Path, scratch: &Path| {
+        let _ = run_git(
+            repo_dir,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+            &[],
+        );
+        let _ = run_git(repo_dir, &["worktree", "prune"], &[]);
+        let _ = std::fs::remove_dir_all(scratch);
+    };
+
+    run_git(
+        &repo_dir,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            &wt.to_string_lossy(),
+            &tip.to_string(),
+        ],
+        &[],
+    )?;
+
+    let hooks_cfg = format!("core.hooksPath={}", posix(&hooks));
+
+    // -- Phase 1 : capturer la todo `--rebase-merges` de git (puis abandon). --
+    let envs1 = [
+        (
+            "GIT_SEQUENCE_EDITOR",
+            format!("sh '{}'", posix(&cap_editor)),
+        ),
+        ("GIT_EDITOR", "true".to_string()),
+    ];
+    let _ = run_git(
+        &wt,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            &hooks_cfg,
+            "-c",
+            "core.abbrev=40",
+            "rebase",
+            "-i",
+            "--rebase-merges",
+            "--onto",
+            &base.to_string(),
+            &base.to_string(),
+        ],
+        &envs1,
+    );
+    let _ = run_git(&wt, &["rebase", "--abort"], &[]);
+    let todo = std::fs::read_to_string(&captured).map_err(|_| {
+        cleanup(&repo_dir, &wt, &scratch);
+        CoreError::Git("capture de la todo --rebase-merges impossible".into())
+    });
+    let todo = match todo {
+        Ok(t) => t,
+        Err(e) => {
+            cleanup(&repo_dir, &wt, &scratch);
+            return Err(e);
+        }
+    };
+
+    // -- Transformation : uniquement les lignes `pick`. --
+    let leaders: HashSet<Oid> = groups.iter().map(|g| g.leader).collect();
+    let fixups: HashSet<Oid> = groups
+        .iter()
+        .flat_map(|g| g.fixups.iter().copied())
+        .collect();
+    let match_oid =
+        |set: &HashSet<Oid>, sha: &str| set.iter().any(|o| o.to_string().starts_with(sha));
+    let mut out = String::new();
+    for line in todo.lines() {
+        let t = line.trim_start();
+        let cmd = t.split_whitespace().next().unwrap_or("");
+        if cmd == "pick" || cmd == "p" {
+            let sha = t.split_whitespace().nth(1).unwrap_or("");
+            if match_oid(&fixups, sha) {
+                out.push_str(&format!("fixup {sha}\n"));
+            } else if match_oid(&leaders, sha) {
+                out.push_str(line);
+                out.push('\n');
+            }
+            // sinon : commit abandonné (hors groupes) → ligne retirée.
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    std::fs::write(&transformed, &out)?;
+
+    // -- Phase 2 : rejouer la todo transformée (hook post-rewrite actif). --
+    let envs2 = [
+        (
+            "GIT_SEQUENCE_EDITOR",
+            format!("cp '{}'", posix(&transformed)),
+        ),
+        ("GIT_EDITOR", "true".to_string()),
+    ];
+    let rebase = run_git_cancellable(
+        &wt,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            &hooks_cfg,
+            "-c",
+            "core.abbrev=40",
+            "rebase",
+            "-i",
+            "--rebase-merges",
+            "--onto",
+            &base.to_string(),
+            &base.to_string(),
+        ],
+        &envs2,
+        cancel,
+    );
+    if let Err(e) = rebase {
+        let conflicts =
+            run_git(&wt, &["diff", "--name-only", "--diff-filter=U"], &[]).unwrap_or_default();
+        let _ = run_git(&wt, &["rebase", "--abort"], &[]);
+        cleanup(&repo_dir, &wt, &scratch);
+        return Err(match e {
+            CoreError::Cancelled => CoreError::Cancelled,
+            e => {
+                let files = if conflicts.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " Fichiers en conflit : {}.",
+                        conflicts.lines().collect::<Vec<_>>().join(", ")
+                    )
+                };
+                CoreError::Refused(format!(
+                    "le rejeu de la structure à travers un merge a échoué (conflit probable) : {e}.{files}"
+                ))
+            }
+        });
+    }
+
+    let head = run_git(&wt, &["rev-parse", "HEAD"], &[])?;
+    let new_tip = Oid::from_str(&head).map_err(|e| CoreError::Git(e.to_string()))?;
+
+    let mut map: HashMap<Oid, Oid> = HashMap::new();
+    if let Ok(txt) = std::fs::read_to_string(&map_file) {
+        for line in txt.lines() {
+            let mut it = line.split_whitespace();
+            if let (Some(o), Some(n)) = (it.next(), it.next()) {
+                if let (Ok(oo), Ok(nn)) = (Oid::from_str(o), Oid::from_str(n)) {
+                    map.insert(oo, nn);
+                }
+            }
+        }
+    }
+    cleanup(&repo_dir, &wt, &scratch);
+    Ok((new_tip, map))
+}

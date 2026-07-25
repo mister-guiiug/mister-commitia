@@ -339,11 +339,31 @@ fn t10_reword_across_merge_preserves_topology() {
     assert!(msg.contains("reformule"), "{msg}");
 }
 
-/// T10 : un changement de STRUCTURE à travers un merge reste refusé (garde-fou).
+/// T10 complet : garde-fous RESTANTS à travers un merge — le réordonnancement
+/// (topologie ambiguë) et toute opération ciblant le commit de merge lui-même
+/// (ici un drop de M) restent refusés.
 #[test]
-fn t10_structure_change_across_merge_refused() {
-    let (f, (c, _d, _e, _m)) = merge_fixture();
+fn t10_merge_structure_guardrails() {
+    let (f, (c, d, e, m)) = merge_fixture();
     let (core, repo_id) = core_with(&f);
+
+    // (a) réordonnancement à travers un merge → refusé.
+    let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Reorder {
+                    order: vec![d.to_string(), c.to_string(), e.to_string(), m.to_string()],
+                },
+            )],
+        )
+        .unwrap();
+    let err = core.plan_dry_run(&plan.id).unwrap_err().to_string();
+    assert!(err.contains("réordonnancement"), "{err}");
+
+    // (b) opération ciblant le commit de MERGE (drop de M) → refusé.
     let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
     let plan = core
         .plan_set_ops(
@@ -351,7 +371,7 @@ fn t10_structure_change_across_merge_refused() {
             vec![op(
                 1,
                 Operation::Drop {
-                    target: c.to_string(),
+                    target: m.to_string(),
                     reason: "x".into(),
                 },
             )],
@@ -359,7 +379,113 @@ fn t10_structure_change_across_merge_refused() {
         .unwrap();
     let err = core.plan_dry_run(&plan.id).unwrap_err().to_string();
     assert!(err.contains("merge"), "{err}");
-    assert!(err.contains("structure"), "{err}");
+}
+
+/// T10 complet : un changement de STRUCTURE (squash de deux commits mainline
+/// contigus) à travers un segment contenant un MERGE réussit — le merge à 2
+/// parents est PRÉSERVÉ et l'arbre final est identique (squash sans perte).
+#[test]
+fn t10_structure_change_across_merge_supported() {
+    let f = init_repo();
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n")],
+        "chore: init",
+        1_700_000_000,
+    );
+    checkout_new_branch(&f.repo, "feature/merge");
+    let _c = commit(
+        &f.repo,
+        &[("src/c.rs", "// c\n")],
+        "feat: base",
+        1_700_000_100,
+    );
+    // Branche side depuis C → E.
+    {
+        let cc = f.repo.find_commit(_c).unwrap();
+        f.repo.branch("side", &cc, false).unwrap();
+    }
+    checkout_existing(&f.repo, "side");
+    let _e = commit(
+        &f.repo,
+        &[("src/e.rs", "// e\n")],
+        "feat: side work",
+        1_700_000_200,
+    );
+    // Retour mainline → deux commits CONTIGUS d1, d2.
+    checkout_existing(&f.repo, "feature/merge");
+    let d1 = commit(
+        &f.repo,
+        &[("src/d.rs", "// d1\n")],
+        "wip: d part 1",
+        1_700_000_300,
+    );
+    let d2 = commit(
+        &f.repo,
+        &[("src/d.rs", "// d1\n// d2\n")],
+        "wip: d part 2",
+        1_700_000_400,
+    );
+    let e_tip = f.repo.refname_to_id("refs/heads/side").unwrap();
+    let m = merge_commit(
+        &f.repo,
+        &[d2, e_tip],
+        &[("src/d.rs", "// d1\n// d2\n"), ("src/e.rs", "// e\n")],
+        "merge: integrate side work",
+        1_700_000_500,
+    );
+
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Squash {
+                    targets: vec![d1.to_string(), d2.to_string()],
+                    new_message: "feat: d combined".into(),
+                },
+            )],
+        )
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(
+        plan.status,
+        PlanStatus::DryRunOk,
+        "squash à travers le merge accepté"
+    );
+
+    let preview = f
+        .repo
+        .refname_to_id(plan.preview_ref.as_ref().unwrap())
+        .unwrap();
+    let new_tip = f.repo.find_commit(preview).unwrap();
+    assert_eq!(
+        new_tip.parent_count(),
+        2,
+        "le merge à 2 parents est préservé"
+    );
+    assert_eq!(
+        new_tip.tree_id(),
+        f.repo.find_commit(m).unwrap().tree_id(),
+        "arbre final identique (squash sans drop)"
+    );
+
+    // Le message fusionné apparaît dans la préview.
+    let combined = plan
+        .mapping
+        .iter()
+        .find(|mm| mm.old.contains(&d1.to_string()))
+        .expect("mapping du groupe fusionné");
+    let msg = f
+        .repo
+        .find_commit(git2::Oid::from_str(&combined.new).unwrap())
+        .unwrap()
+        .message()
+        .unwrap()
+        .to_string();
+    assert!(msg.contains("d combined"), "{msg}");
 }
 
 /// CA-3 : pas d'application sans dry-run du même plan.

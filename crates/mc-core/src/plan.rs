@@ -334,26 +334,60 @@ impl PlanEngine {
         ctx.step("vérification de l'empreinte", 0, None)?;
         let (base, tip) = Self::check_fingerprint(repo, plan)?;
         let segment = GitEngine::segment(repo, Some(base), tip)?;
-        // T10 : un segment contenant un merge est réécrivable UNIQUEMENT pour de
-        // la reformulation de messages (topologie et arbres préservés, aucun
-        // conflit possible). Les changements de structure restent refusés.
-        let has_merge = segment
+        // T10 complet : un segment contenant un merge accepte les changements de
+        // STRUCTURE (squash/fixup/drop de commits non-merge) via `--rebase-merges`,
+        // git préservant la topologie. Restent refusés : le réordonnancement
+        // (sémantique ambiguë à travers un merge) et toute opération ciblant un
+        // commit de merge (seule la reformulation de messages seuls le permet,
+        // via reword_dag).
+        let merge_oids: std::collections::HashSet<Oid> = segment
             .iter()
-            .map(|o| repo.find_commit(*o).map(|c| c.parent_count() > 1))
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .any(|m| m);
+            .filter(|o| {
+                repo.find_commit(**o)
+                    .map(|c| c.parent_count() > 1)
+                    .unwrap_or(false)
+            })
+            .copied()
+            .collect();
+        let has_merge = !merge_oids.is_empty();
         let only_reword = plan
             .ops
             .iter()
             .all(|o| matches!(o.op, Operation::Reword { .. }));
         if has_merge && !only_reword {
-            return Err(CoreError::Refused(
-                "le segment contient un merge : seule la reformulation de messages (reword) est \
-                 supportée à travers un merge ; les changements de structure (squash, fixup, drop, \
-                 réordonnancement) ne le sont pas"
-                    .into(),
-            ));
+            if plan
+                .ops
+                .iter()
+                .any(|o| matches!(o.op, Operation::Reorder { .. }))
+            {
+                return Err(CoreError::Refused(
+                    "le réordonnancement à travers un merge n'est pas supporté (topologie ambiguë)"
+                        .into(),
+                ));
+            }
+            for op in &plan.ops {
+                let targets: Vec<&String> = match &op.op {
+                    Operation::Reword { target, .. } | Operation::Drop { target, .. } => {
+                        vec![target]
+                    }
+                    Operation::Squash { targets, .. } | Operation::Fixup { targets } => {
+                        targets.iter().collect()
+                    }
+                    Operation::Reorder { .. } => vec![],
+                };
+                for t in targets {
+                    if let Ok(oid) = resolve(&segment, t) {
+                        if merge_oids.contains(&oid) {
+                            return Err(CoreError::Refused(
+                                "un commit de merge ne peut être ni fusionné, ni abandonné, ni \
+                                 reformulé au sein d'un changement de structure ; seule la \
+                                 reformulation de messages seuls (sans autre opération) le permet"
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         ctx.step("compilation du plan", 0, None)?;
         let compiled = compile(&segment, &plan.ops)?;
@@ -384,36 +418,79 @@ impl PlanEngine {
             (new_tip, mapping)
         } else {
             ctx.step("rejeu de la structure (sequencer git)", 0, None)?;
-            let (h1, groupmap) =
-                rewrite::sequencer_rebase(repo, base, tip, &compiled.groups, &ctx.cancel)?;
-            let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
-            for (group, new_oid) in &groupmap {
-                if let Some(m) = compiled.messages.get(&group.leader) {
-                    msg_by_new.insert(*new_oid, m.clone());
-                }
-            }
-            let (h2, map2) = rewrite::reword_chain(repo, Some(base), h1, &msg_by_new, ctx)?;
-            if !compiled.has_drop {
-                let t_old = repo.find_commit(tip)?.tree_id();
-                let t_new = repo.find_commit(h2)?.tree_id();
-                if t_old != t_new {
-                    return Err(CoreError::Git(
-                        "invariant violé : l'arbre final diffère sans drop".into(),
-                    ));
-                }
-            }
-            let mapping = groupmap
-                .iter()
-                .map(|(g, new_oid)| {
-                    let mut old = vec![g.leader.to_string()];
-                    old.extend(g.fixups.iter().map(|o| o.to_string()));
-                    ShaMapping {
-                        old,
-                        new: map2.get(new_oid).copied().unwrap_or(*new_oid).to_string(),
+            if has_merge {
+                // T10 complet : structure à travers un merge — git préserve la
+                // topologie (`--rebase-merges`), les messages suivent via reword_dag.
+                let (h1, oldnew) = rewrite::sequencer_rebase_merges(
+                    repo,
+                    base,
+                    tip,
+                    &compiled.groups,
+                    &ctx.cancel,
+                )?;
+                let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
+                for (leader, m) in &compiled.messages {
+                    if let Some(nw) = oldnew.get(leader) {
+                        msg_by_new.insert(*nw, m.clone());
                     }
-                })
-                .collect::<Vec<_>>();
-            (h2, mapping)
+                }
+                let (h2, rwmap) = rewrite::reword_dag(repo, base, h1, &msg_by_new, ctx)?;
+                if !compiled.has_drop {
+                    let t_old = repo.find_commit(tip)?.tree_id();
+                    let t_new = repo.find_commit(h2)?.tree_id();
+                    if t_old != t_new {
+                        return Err(CoreError::Git(
+                            "invariant violé : l'arbre final diffère sans drop".into(),
+                        ));
+                    }
+                }
+                let mapping = compiled
+                    .groups
+                    .iter()
+                    .filter_map(|g| {
+                        let n1 = *oldnew.get(&g.leader)?;
+                        let nf = *rwmap.get(&n1).unwrap_or(&n1);
+                        let mut old = vec![g.leader.to_string()];
+                        old.extend(g.fixups.iter().map(|o| o.to_string()));
+                        Some(ShaMapping {
+                            old,
+                            new: nf.to_string(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (h2, mapping)
+            } else {
+                let (h1, groupmap) =
+                    rewrite::sequencer_rebase(repo, base, tip, &compiled.groups, &ctx.cancel)?;
+                let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
+                for (group, new_oid) in &groupmap {
+                    if let Some(m) = compiled.messages.get(&group.leader) {
+                        msg_by_new.insert(*new_oid, m.clone());
+                    }
+                }
+                let (h2, map2) = rewrite::reword_chain(repo, Some(base), h1, &msg_by_new, ctx)?;
+                if !compiled.has_drop {
+                    let t_old = repo.find_commit(tip)?.tree_id();
+                    let t_new = repo.find_commit(h2)?.tree_id();
+                    if t_old != t_new {
+                        return Err(CoreError::Git(
+                            "invariant violé : l'arbre final diffère sans drop".into(),
+                        ));
+                    }
+                }
+                let mapping = groupmap
+                    .iter()
+                    .map(|(g, new_oid)| {
+                        let mut old = vec![g.leader.to_string()];
+                        old.extend(g.fixups.iter().map(|o| o.to_string()));
+                        ShaMapping {
+                            old,
+                            new: map2.get(new_oid).copied().unwrap_or(*new_oid).to_string(),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (h2, mapping)
+            }
         };
 
         ctx.step("contrôle des invariants et écriture de la préview", 0, None)?;
