@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpDown, Eraser, PlugZap, ShieldAlert, Trash2 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
+import { t, useLang } from "../i18n";
 import { useTask } from "../tasks";
 import type { BatchDeleteResult, CiAccount, CiKind, CiRun, PurgeResult, RetentionPolicy, SimulationReport } from "../types";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../ui";
 
 export default function CiPage() {
+  useLang();
   const toast = useToast();
   const [accounts, setAccounts] = useState<CiAccount[]>([]);
   const [policies, setPolicies] = useState<RetentionPolicy[]>([]);
@@ -240,34 +242,32 @@ export default function CiPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-4">
       <div className="grid grid-cols-2 gap-4" ref={formRef}>
-        <Card title="Ajouter un accès plateforme">
+        <Card title={t("ci.acct.title")}>
           <div className="space-y-2.5">
-            <Field label="Plateforme">
+            <Field label={t("ci.platform")}>
               <select className={inputCls} value={kind} onChange={(e) => setKind(e.target.value as CiKind)}>
-                <option value="github">GitHub.com</option>
-                <option value="github_enterprise">GitHub Enterprise Server</option>
-                <option value="azure_devops">Azure DevOps Services</option>
-                <option value="azure_devops_server">Azure DevOps Server</option>
+                <option value="github">{t("ci.gh")}</option>
+                <option value="github_enterprise">{t("ci.ghe")}</option>
+                <option value="azure_devops">{t("ci.azdo")}</option>
+                <option value="azure_devops_server">{t("ci.azdoServer")}</option>
               </select>
             </Field>
-            <Field label="URL de base de l'API">
+            <Field label={t("ci.apiUrl")}>
               <input className={inputCls} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
             </Field>
             <div className="grid grid-cols-3 gap-2">
-              <Field label="Organisation / owner">
+              <Field label={t("ci.orgOwner")}>
                 <input className={inputCls} value={org} onChange={(e) => setOrg(e.target.value)} />
               </Field>
-              <Field label="Projet (AzDO)">
+              <Field label={t("ci.projectAzdo")}>
                 <input className={inputCls} value={project} onChange={(e) => setProject(e.target.value)} />
               </Field>
-              <Field label="Dépôt (GitHub)">
+              <Field label={t("ci.repoGithub")}>
                 <input className={inputCls} value={repo} onChange={(e) => setRepo(e.target.value)} />
               </Field>
             </div>
             <div className="rounded border border-sky-900 bg-sky-950/40 p-2.5 text-xs text-sky-200">
-              <div className="mb-1 font-semibold">
-                Droits requis (créer un token minimal) — affichés avant l'enregistrement&nbsp;:
-              </div>
+              <div className="mb-1 font-semibold">{t("ci.scopesTitle")}</div>
               <ul className="list-inside list-disc space-y-0.5">
                 {scopes.map(([f, s]) => (
                   <li key={f}>
@@ -276,7 +276,7 @@ export default function CiPage() {
                 ))}
               </ul>
             </div>
-            <Field label="Token (stocké au coffre du système, jamais en clair)">
+            <Field label={t("ci.token")}>
               <input
                 type="password"
                 className={inputCls}
@@ -286,42 +286,40 @@ export default function CiPage() {
               />
             </Field>
             <Button kind="primary" onClick={addAccount} loading={busy} disabled={!token}>
-              <PlugZap size={ICON_SM} /> Valider &amp; enregistrer
+              <PlugZap size={ICON_SM} /> {t("ci.validateSave")}
             </Button>
           </div>
         </Card>
 
-        <Card title="Politique de rétention">
+        <Card title={t("ci.policy.title")}>
           <div className="space-y-2.5">
-            <Field label="Nom">
+            <Field label={t("ci.name")}>
               <input className={inputCls} value={polName} onChange={(e) => setPolName(e.target.value)} />
             </Field>
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Âge max (jours)">
+              <Field label={t("ci.maxAge")}>
                 <input type="number" className={inputCls} value={maxAge} onChange={(e) => setMaxAge(Number(e.target.value))} />
               </Field>
-              <Field label="Conserver les N derniers / pipeline">
+              <Field label={t("ci.keepLast")}>
                 <input type="number" className={inputCls} value={keepLast} onChange={(e) => setKeepLast(Number(e.target.value))} />
               </Field>
             </div>
-            <Field label="Branches protégées (séparées par des virgules)">
+            <Field label={t("ci.protectedBranches")}>
               <input className={inputCls} value={protectBranches} onChange={(e) => setProtectBranches(e.target.value)} />
             </Field>
-            <p className="text-xs text-slate-500">
-              Toujours protégés, non désactivable&nbsp;: runs en cours, runs sous retention lease (Azure DevOps).
-            </p>
-            <Button onClick={savePolicy}>Enregistrer la politique</Button>
+            <p className="text-xs text-slate-500">{t("ci.alwaysProtected")}</p>
+            <Button onClick={savePolicy}>{t("ci.savePolicy")}</Button>
           </div>
         </Card>
       </div>
 
       <Card
-        title="Inventaire &amp; simulation"
+        title={t("ci.invSim.title")}
         actions={
           <>
             <select
               className={inputCls + " !w-auto"}
-              aria-label="Compte plateforme"
+              aria-label={t("ci.acctAria")}
               value={account}
               onChange={(e) => setAccount(e.target.value)}
             >
@@ -333,11 +331,11 @@ export default function CiPage() {
             </select>
             <select
               className={inputCls + " !w-auto"}
-              aria-label="Politique de rétention"
+              aria-label={t("ci.policyAria")}
               value={policy}
               onChange={(e) => setPolicy(e.target.value)}
             >
-              <option value="">— politique —</option>
+              <option value="">{t("ci.policyPlaceholder")}</option>
               {policies.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -345,10 +343,10 @@ export default function CiPage() {
               ))}
             </select>
             <Button onClick={inventory} loading={busy} disabled={!account}>
-              Inventorier
+              {t("ci.inventory")}
             </Button>
             <Button kind="primary" onClick={simulate} loading={busy} disabled={!account || !policy}>
-              Simuler (aucune suppression)
+              {t("ci.simulate")}
             </Button>
           </>
         }
@@ -367,10 +365,10 @@ export default function CiPage() {
         )}
         {accounts.length === 0 && (
           <Empty
-            actionLabel="Ajouter un accès"
+            actionLabel={t("ci.addAccess")}
             onAction={() => formRef.current?.scrollIntoView({ behavior: "smooth" })}
           >
-            Aucun compte plateforme déclaré.
+            {t("ci.noAccount")}
           </Empty>
         )}
         {accounts.length > 0 && runs.length > 0 && !report && (
@@ -382,20 +380,20 @@ export default function CiPage() {
         {report && (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-3 text-sm">
-              <Badge tone="slate">{report.total} runs au total</Badge>
-              <Badge tone="teal">{report.kept_recent} conservés (âge / N derniers)</Badge>
-              <VerdictBadge verdict="attention" label={`${report.protected.length} protégés`} />
-              <VerdictBadge verdict="bloquant" label={`${report.candidates.length} candidats à suppression`} />
+              <Badge tone="slate">{report.total} {t("ci.total")}</Badge>
+              <Badge tone="teal">{report.kept_recent} {t("ci.kept")}</Badge>
+              <VerdictBadge verdict="attention" label={`${report.protected.length} ${t("ci.protectedN")}`} />
+              <VerdictBadge verdict="bloquant" label={`${report.candidates.length} ${t("ci.candidatesN")}`} />
               {pending.length > 0 && (
-                <Button kind="danger" onClick={() => setBatchConfirm(true)} title="Suppression en masse (throttling, reprise, journalisée)">
-                  <Trash2 size={ICON_SM} /> {batchDone.length > 0 ? `Reprendre (${pending.length})` : `Tout supprimer (${pending.length})`}
+                <Button kind="danger" onClick={() => setBatchConfirm(true)} title={t("ci.batchTitle")}>
+                  <Trash2 size={ICON_SM} /> {batchDone.length > 0 ? `${t("ci.resume")} (${pending.length})` : `${t("ci.deleteAll")} (${pending.length})`}
                 </Button>
               )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <h3 className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-400">
-                  <ShieldAlert size={ICON_SM} /> Protégés (jamais supprimés)
+                  <ShieldAlert size={ICON_SM} /> {t("ci.protectedHead")}
                 </h3>
                 <ul className="space-y-1 text-sm">
                   {report.protected.map((p) => (
@@ -410,18 +408,18 @@ export default function CiPage() {
               </div>
               <div>
                 <h3 className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-rose-400">
-                  <span>Candidats (suppression unitaire, confirmation renforcée)</span>
+                  <span>{t("ci.candidatesHead")}</span>
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-slate-400 hover:text-slate-200"
                     onClick={() => setSortAsc((s) => !s)}
-                    title="Trier par date"
+                    title={`${t("au.sortBy")} ${t("ci.date")}`}
                   >
-                    <ArrowUpDown size={ICON_SM} /> date {sortAsc ? "↑" : "↓"}
+                    <ArrowUpDown size={ICON_SM} /> {t("ci.date")} {sortAsc ? "↑" : "↓"}
                   </button>
                 </h3>
                 {sortedCandidates.length === 0 ? (
-                  <Empty>Aucun candidat selon cette politique.</Empty>
+                  <Empty>{t("ci.noCandidates")}</Empty>
                 ) : (
                   <ul className="max-h-72 space-y-1 overflow-y-auto pr-1 text-sm">
                     {sortedCandidates.map((run) => (
@@ -435,7 +433,7 @@ export default function CiPage() {
                             {run.branch} · {run.created_at.slice(0, 10)} · {run.result ?? run.status}
                           </span>
                         </span>
-                        <Button kind="danger" onClick={() => setDeleting(run)} title="Supprimer ce run (confirmation renforcée)">
+                        <Button kind="danger" onClick={() => setDeleting(run)} title={t("ci.deleteConfirm")}>
                           <Trash2 size={ICON_SM} />
                         </Button>
                       </li>
@@ -447,22 +445,21 @@ export default function CiPage() {
           </div>
         )}
         {accounts.length > 0 && !report && runs.length === 0 && (
-          <Empty actionLabel={account ? "Inventorier" : undefined} onAction={account ? inventory : undefined}>
-            Inventorier puis simuler&nbsp;: le rapport distingue candidats et protégés avec motifs.
+          <Empty actionLabel={account ? t("ci.inventory") : undefined} onAction={account ? inventory : undefined}>
+            {t("ci.invSimEmpty")}
           </Empty>
         )}
         {runs.length > 0 && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
             <span className="flex-1 text-xs text-slate-400">
-              Reclaim de stockage&nbsp;: purge des logs et artefacts en <b>conservant</b> les runs
-              ({purgeTargets.length} run(s) éligible(s)&nbsp;; runs en cours ignorés). GitHub uniquement.
+              {t("ci.reclaim").replace("{n}", String(purgeTargets.length))}
             </span>
             <Button
               onClick={() => setPurge(true)}
               disabled={purgeTargets.length === 0}
-              title="Purge des logs et artefacts — les runs sont conservés"
+              title={t("ci.purgeTitle")}
             >
-              <Eraser size={ICON_SM} /> Purger logs + artefacts ({purgeTargets.length})
+              <Eraser size={ICON_SM} /> {t("ci.purgeBtn")} ({purgeTargets.length})
             </Button>
           </div>
         )}
@@ -470,7 +467,7 @@ export default function CiPage() {
 
       {deleting && (
         <ConfirmTyped
-          title="Suppression définitive d'un run"
+          title={t("ci.deleteTitle")}
           description={
             <>
               Run <b>#{deleting.run_id}</b> du pipeline <b>{deleting.pipeline_name}</b> ({deleting.branch} ·{" "}
@@ -479,7 +476,7 @@ export default function CiPage() {
             </>
           }
           expected={deleting.pipeline_name}
-          confirmLabel="Supprimer ce run"
+          confirmLabel={t("ci.deleteConfirm")}
           busy={busy}
           onConfirm={(typed) => void doDelete(deleting, typed)}
           onClose={() => setDeleting(null)}
@@ -488,7 +485,7 @@ export default function CiPage() {
 
       {batchConfirm && report && (
         <ConfirmTyped
-          title="Suppression en masse des candidats"
+          title={t("ci.batchTitle")}
           description={
             <>
               <b>{pending.length}</b> run(s) seront supprimés un par un. Chaque suppression est
@@ -507,7 +504,7 @@ export default function CiPage() {
 
       {purge && (
         <ConfirmTyped
-          title="Purge des logs et artefacts"
+          title={t("ci.purgeTitle")}
           description={
             <>
               <b>{purgeTargets.length}</b> run(s) verront leurs données de stockage purgées&nbsp;;
@@ -521,7 +518,7 @@ export default function CiPage() {
                     checked={purgeArtifacts}
                     onChange={(e) => setPurgeArtifacts(e.target.checked)}
                   />
-                  Artefacts
+                  {t("ci.artifacts")}
                 </label>
                 <label className="flex items-center gap-1.5">
                   <input
@@ -529,7 +526,7 @@ export default function CiPage() {
                     checked={purgeLogs}
                     onChange={(e) => setPurgeLogs(e.target.checked)}
                   />
-                  Logs
+                  {t("ci.logs")}
                 </label>
               </div>
             </>

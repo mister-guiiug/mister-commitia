@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowUpDown, Download, RefreshCw } from "lucide-react";
 import { asIpcError, call } from "../ipc";
+import { t, useLang } from "../i18n";
 import type { AuditEvent } from "../types";
 import { Badge, Button, Card, Empty, ErrorBox, ICON_SM, shaCls, thCls, trCls, useToast } from "../ui";
 
@@ -27,7 +28,7 @@ function SortTh({
         type="button"
         className="inline-flex items-center gap-1 hover:text-slate-200"
         onClick={() => onSort(k)}
-        aria-label={`Trier par ${typeof children === "string" ? children : k}`}
+        aria-label={`${t("au.sortBy")} ${typeof children === "string" ? children : k}`}
       >
         {children}
         {active ? (sort.asc ? "↑" : "↓") : <ArrowUpDown size={12} className="opacity-40" />}
@@ -37,6 +38,7 @@ function SortTh({
 }
 
 export default function AuditPage() {
+  useLang();
   const toast = useToast();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [sort, setSort] = useState<{ key: SortKey; asc: boolean }>({ key: "seq", asc: false });
@@ -75,7 +77,7 @@ export default function AuditPage() {
       a.download = "mister-commitia-audit.jsonl";
       a.click();
       URL.revokeObjectURL(a.href);
-      toast("success", "Journal exporté (JSONL chronologique)");
+      toast("success", t("au.exported"));
     } catch (e) {
       setError(asIpcError(e).message);
     }
@@ -84,27 +86,27 @@ export default function AuditPage() {
   return (
     <div className="mx-auto max-w-5xl">
       <Card
-        title="Journal d'audit (append-only, secrets masqués)"
+        title={t("au.title")}
         actions={
           <>
-            <Button onClick={refresh}><RefreshCw size={ICON_SM} /> Actualiser</Button>
-            <Button onClick={exportJsonl}><Download size={ICON_SM} /> Export JSONL</Button>
+            <Button onClick={refresh}><RefreshCw size={ICON_SM} /> {t("au.refresh")}</Button>
+            <Button onClick={exportJsonl}><Download size={ICON_SM} /> {t("au.export")}</Button>
           </>
         }
       >
         <ErrorBox error={error} />
         {events.length === 0 ? (
-          <Empty>Aucun événement pour l'instant.</Empty>
+          <Empty>{t("au.empty")}</Empty>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-800">
-                <SortTh k="seq" sort={sort} onSort={toggleSort}>#</SortTh>
-                <th className={thCls}>Horodatage</th>
-                <SortTh k="category" sort={sort} onSort={toggleSort}>Catégorie</SortTh>
-                <SortTh k="action" sort={sort} onSort={toggleSort}>Action</SortTh>
-                <th className={thCls}>Cible</th>
-                <SortTh k="result" sort={sort} onSort={toggleSort}>Résultat</SortTh>
+                <SortTh k="seq" sort={sort} onSort={toggleSort}>{t("au.col.seq")}</SortTh>
+                <th className={thCls}>{t("au.col.ts")}</th>
+                <SortTh k="category" sort={sort} onSort={toggleSort}>{t("au.col.category")}</SortTh>
+                <SortTh k="action" sort={sort} onSort={toggleSort}>{t("au.col.action")}</SortTh>
+                <th className={thCls}>{t("au.col.target")}</th>
+                <SortTh k="result" sort={sort} onSort={toggleSort}>{t("au.col.result")}</SortTh>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70">

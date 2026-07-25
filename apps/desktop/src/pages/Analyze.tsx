@@ -9,6 +9,7 @@ import type {
   RepoRef, RiskAxis, ScanResult,
 } from "../types";
 import GitGraph from "../GitGraph";
+import { t, useLang } from "../i18n";
 import { useTask } from "../tasks";
 import {
   Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, ICON_SM, Modal, ProgressPanel,
@@ -24,6 +25,7 @@ const flagLabels: Record<string, [string, string]> = {
 };
 
 export default function AnalyzePage({ repo }: { repo: RepoRef }) {
+  useLang();
   const toast = useToast();
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [branches, setBranches] = useState<BranchInfo[]>([]);
@@ -432,7 +434,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
     }
   };
 
-  if (!scan) return <p className="text-sm text-slate-500">{error ?? "Analyse en cours…"}</p>;
+  if (!scan) return <p className="text-sm text-slate-500">{error ?? t("an.analyzing")}</p>;
 
   const statusBadge = plan && (
     <Badge
@@ -443,10 +445,10 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         : "slate"
       }
     >
-      {plan.status === "draft" ? "brouillon"
-        : plan.status === "dry_run_ok" ? "dry-run OK"
-        : plan.status === "applied" ? "appliqué"
-        : plan.status === "rolled_back" ? "restauré"
+      {plan.status === "draft" ? t("an.st.draft")
+        : plan.status === "dry_run_ok" ? t("an.st.dryRunOk")
+        : plan.status === "applied" ? t("an.st.applied")
+        : plan.status === "rolled_back" ? t("an.st.rolledBack")
         : plan.status}
     </Badge>
   );
@@ -458,7 +460,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         <span className="font-semibold">{repo.name}</span>
         <select
           className={inputCls + " !w-auto"}
-          aria-label="Branche analysée"
+          aria-label={t("an.branchAria")}
           value={branch}
           onChange={(e) => {
             setPlan(null);
@@ -470,7 +472,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           {branches.map((b) => (
             <option key={b.name} value={b.name}>
               {b.name}
-              {b.is_head ? " (courante)" : ""}
+              {b.is_head ? ` ${t("an.current")}` : ""}
               {repo.protected_branches.includes(b.name) ? " 🔒" : ""}
             </option>
           ))}
@@ -508,10 +510,10 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           )}
         </div>
         <div className="ml-auto flex gap-2 text-xs">
-          <Badge tone="slate">{scan.report.total} commits</Badge>
-          <Badge tone="teal">{scan.report.conform} conformes</Badge>
-          <Badge tone="amber">{scan.report.weak} faibles</Badge>
-          <Badge tone="sky">{scan.report.ai_signatures} mentions d'outils</Badge>
+          <Badge tone="slate">{scan.report.total} {t("an.commits")}</Badge>
+          <Badge tone="teal">{scan.report.conform} {t("an.conform")}</Badge>
+          <Badge tone="amber">{scan.report.weak} {t("an.weak")}</Badge>
+          <Badge tone="sky">{scan.report.ai_signatures} {t("an.aiMentions")}</Badge>
         </div>
       </div>
       <ErrorBox error={error} />
@@ -528,12 +530,12 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
       <Card
         title={
           <span className="flex items-center gap-2">
-            Commits du segment réécrivable (du plus ancien au plus récent)
+            {t("an.segTitle")}
             {reordered && (
               <>
-                <Badge tone="amber">ordre modifié → op reorder au plan</Badge>
+                <Badge tone="amber">{t("an.orderChanged")}</Badge>
                 <Button kind="ghost" onClick={() => setOrder(scan.commits.map((c) => c.sha))}>
-                  rétablir l'ordre
+                  {t("an.resetOrder")}
                 </Button>
               </>
             )}
@@ -541,14 +543,14 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         }
         actions={
           <>
-            <div className="mr-1 inline-flex overflow-hidden rounded border border-slate-700" role="group" aria-label="Mode d'affichage">
+            <div className="mr-1 inline-flex overflow-hidden rounded border border-slate-700" role="group" aria-label={t("an.viewMode")}>
               <button
                 type="button"
                 aria-pressed={view === "list"}
                 onClick={() => setView("list")}
                 className={`inline-flex items-center gap-1 px-2 py-1 text-xs ${view === "list" ? "bg-slate-700 text-slate-100" : "text-slate-400 hover:bg-slate-800"}`}
               >
-                <List size={ICON_SM} /> Liste
+                <List size={ICON_SM} /> {t("an.list")}
               </button>
               <button
                 type="button"
@@ -556,21 +558,21 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 onClick={() => setView("graph")}
                 className={`inline-flex items-center gap-1 px-2 py-1 text-xs ${view === "graph" ? "bg-slate-700 text-slate-100" : "text-slate-400 hover:bg-slate-800"}`}
               >
-                <GitGraphIcon size={ICON_SM} /> Graphe
+                <GitGraphIcon size={ICON_SM} /> {t("an.graph")}
               </button>
             </div>
             <select
               className={inputCls + " !w-auto"}
-              aria-label="Skill à utiliser"
+              aria-label={t("an.skillAria")}
               value={skill}
               onChange={(e) => setSkill(e.target.value)}
             >
-              <option value="conventional-commits">Skill&nbsp;: Conventional Commits (reword)</option>
-              <option value="commit-synthesis">Skill&nbsp;: Synthèse de groupe (squash)</option>
-              <option value="ai-signature-cleaner">Skill&nbsp;: Nettoyage des mentions (gouverné)</option>
+              <option value="conventional-commits">{t("an.skillConv")}</option>
+              <option value="commit-synthesis">{t("an.skillSynth")}</option>
+              <option value="ai-signature-cleaner">{t("an.skillClean")}</option>
             </select>
             <Button kind="primary" onClick={() => void generate(false)} loading={busy} disabled={selection.size === 0}>
-              <Sparkles size={ICON_SM} /> Proposer ({selection.size})
+              <Sparkles size={ICON_SM} /> {t("an.propose")} ({selection.size})
             </Button>
             {scan.squash_suggestions.length > 0 && (
               <Button
@@ -578,9 +580,9 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                   setSkill("commit-synthesis");
                   void generate(false, scan.squash_suggestions);
                 }}
-                title="Groupes suggérés par l'heuristique locale"
+                title={t("an.suggestTitle")}
               >
-                Suggérer des fusions ({scan.squash_suggestions.length})
+                {t("an.suggestMerges")} ({scan.squash_suggestions.length})
               </Button>
             )}
           </>
@@ -594,10 +596,10 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
             <tr className="border-b border-slate-800">
               <th className={thCls + " w-8"}></th>
               <th className={thCls}>SHA</th>
-              <th className={thCls}>Sujet</th>
-              <th className={thCls}>Auteur · date</th>
-              <th className={thCls}>Diff</th>
-              <th className={thCls}>Signaux</th>
+              <th className={thCls}>{t("an.col.subject")}</th>
+              <th className={thCls}>{t("an.col.author")}</th>
+              <th className={thCls}>{t("an.col.diff")}</th>
+              <th className={thCls}>{t("an.col.signals")}</th>
               <th className={thCls + " w-24"}></th>
             </tr>
           </thead>
@@ -645,8 +647,8 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 </td>
                 <td className="py-1.5">
                   <div className="flex flex-wrap gap-1">
-                    {c.on_remote && <Badge tone="rose">partagé</Badge>}
-                    {c.signed && <Badge tone="violet">signé</Badge>}
+                    {c.on_remote && <Badge tone="rose">{t("an.shared")}</Badge>}
+                    {c.signed && <Badge tone="violet">{t("an.signed")}</Badge>}
                     {flagsFor(c.sha).map((f, i) => {
                       const [label, tone] = flagLabels[f.kind] ?? [f.kind, "slate"];
                       return (
@@ -688,7 +690,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                         })
                       }
                     >
-                      {drops.has(c.sha) ? "garder" : "abandonner"}
+                      {drops.has(c.sha) ? t("an.keep") : t("an.drop")}
                     </Button>
                   </span>
                 </td>
@@ -700,7 +702,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
       </Card>
 
       <div className="grid grid-cols-2 gap-4">
-        <Card title={`Propositions (${proposals.length}) — l'IA propose, vous disposez`}>
+        <Card title={t("an.propTitle").replace("{n}", String(proposals.length))}>
           {Object.keys(streams).length > 0 && (
             <div className="mb-2.5 space-y-1.5">
               {Object.entries(streams).map(([g, text]) => (
@@ -790,23 +792,23 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         </Card>
 
         <Card
-          title={<span className="flex items-center gap-2">Plan de réécriture {statusBadge}</span>}
+          title={<span className="flex items-center gap-2">{t("an.planTitle")} {statusBadge}</span>}
           actions={
             <>
-              <Button onClick={buildPlan} loading={busy}>Composer depuis les décisions</Button>
+              <Button onClick={buildPlan} loading={busy}>{t("an.composeFrom")}</Button>
               {plan && plan.status === "draft" && (
                 <Button kind="primary" onClick={dryRun} loading={busy}>
-                  <FlaskConical size={ICON_SM} /> Dry-run
+                  <FlaskConical size={ICON_SM} /> {t("an.dryRun")}
                 </Button>
               )}
               {plan?.status === "dry_run_ok" && (
                 <Button kind="danger" onClick={() => void apply()} loading={busy}>
-                  <Play size={ICON_SM} /> Appliquer
+                  <Play size={ICON_SM} /> {t("an.apply")}
                 </Button>
               )}
               {plan?.status === "applied" && (
                 <Button onClick={rollback} loading={busy}>
-                  <Undo2 size={ICON_SM} /> Rollback
+                  <Undo2 size={ICON_SM} /> {t("an.rollback")}
                 </Button>
               )}
               {plan?.status === "applied" && (
@@ -814,9 +816,9 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                   kind="primary"
                   onClick={openPush}
                   loading={busy}
-                  title="Pousser la branche réécrite (force-with-lease guidé)"
+                  title={t("an.push")}
                 >
-                  <UploadCloud size={ICON_SM} /> Pousser
+                  <UploadCloud size={ICON_SM} /> {t("an.push")}
                 </Button>
               )}
               {plan && (
@@ -848,10 +850,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           }
         >
           {!plan ? (
-            <Empty>
-              Accepter/éditer des propositions (et éventuellement marquer des abandons), puis composer le plan.
-              Séquence imposée&nbsp;: plan → dry-run → backup automatique → application → rollback possible.
-            </Empty>
+            <Empty>{t("an.planEmpty")}</Empty>
           ) : (
             <div className="space-y-3 text-sm">
               <ol className="space-y-1">

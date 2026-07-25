@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowRight, FolderPlus, Trash2 } from "lucide-react";
 import { asIpcError, call, pickDirectory } from "../ipc";
+import { t, useLang } from "../i18n";
 import type { RepoRef } from "../types";
 import { Badge, Button, Card, Empty, ErrorBox, ICON_SM, Modal, useToast } from "../ui";
 
@@ -12,6 +13,7 @@ export default function ReposPage({
   onSelect: (r: RepoRef) => void;
   onChanged: () => Promise<void>;
 }) {
+  useLang();
   const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,7 +27,7 @@ export default function ReposPage({
     try {
       const r = await call<RepoRef>("repo_declare", { path });
       await onChanged();
-      toast("success", `Dépôt « ${r.name} » déclaré — analyse locale disponible`);
+      toast("success", t("repo.declared").replace("{n}", r.name));
     } catch (e) {
       setError(asIpcError(e).message);
     } finally {
@@ -39,7 +41,7 @@ export default function ReposPage({
       await call("repo_remove", { id: r.id });
       setRemoving(null);
       await onChanged();
-      toast("info", `« ${r.name} » retiré du workspace (le dépôt Git est intact)`);
+      toast("info", t("repo.removed").replace("{n}", r.name));
     } catch (e) {
       setError(asIpcError(e).message);
     }
@@ -48,17 +50,17 @@ export default function ReposPage({
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <Card
-        title="Dépôts déclarés"
+        title={t("repo.declared.title")}
         actions={
           <Button kind="primary" onClick={add} loading={busy}>
-            <FolderPlus size={ICON_SM} /> Déclarer un dépôt local
+            <FolderPlus size={ICON_SM} /> {t("repo.add")}
           </Button>
         }
       >
         <ErrorBox error={error} />
         {repos.length === 0 ? (
-          <Empty actionLabel="Déclarer un dépôt local" onAction={add}>
-            Aucun dépôt. L'analyse est 100&nbsp;% locale (mode offline).
+          <Empty actionLabel={t("repo.add")} onAction={add}>
+            {t("repo.empty")}
           </Empty>
         ) : (
           <ul className="divide-y divide-slate-800">
@@ -67,28 +69,28 @@ export default function ReposPage({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-slate-100">{r.name}</span>
-                    {selected?.id === r.id && <Badge tone="teal">sélectionné</Badge>}
+                    {selected?.id === r.id && <Badge tone="teal">{t("repo.selected")}</Badge>}
                     {r.governance.ai_attribution_policy === "keep-required" ? (
-                      <Badge tone="sky">traçabilité IA exigée</Badge>
+                      <Badge tone="sky">{t("repo.aiRequired")}</Badge>
                     ) : (
-                      <Badge tone="violet">normalisation autorisée</Badge>
+                      <Badge tone="violet">{t("repo.aiAllowed")}</Badge>
                     )}
                   </div>
                   <div className="truncate text-xs text-slate-500" title={r.local_path}>
                     {r.local_path}
-                    {r.remote_url ? ` · ${r.remote_url}` : " · sans remote"}
+                    {r.remote_url ? ` · ${r.remote_url}` : ` · ${t("repo.noRemote")}`}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
-                    Branche par défaut&nbsp;: <code>{r.default_branch ?? "?"}</code> · protégées&nbsp;:
+                    {t("repo.defaultBranch")}&nbsp;: <code>{r.default_branch ?? "?"}</code> · {t("repo.protectedLabel")}&nbsp;:
                     {r.protected_branches.map((b) => (
                       <Badge key={b}>{b}</Badge>
                     ))}
                   </div>
                 </div>
                 <Button onClick={() => onSelect(r)}>
-                  Analyser <ArrowRight size={ICON_SM} />
+                  {t("repo.analyze")} <ArrowRight size={ICON_SM} />
                 </Button>
-                <Button kind="danger" onClick={() => setRemoving(r)} title="Retirer du workspace">
+                <Button kind="danger" onClick={() => setRemoving(r)} title={t("repo.remove")}>
                   <Trash2 size={ICON_SM} />
                 </Button>
               </li>
@@ -96,30 +98,24 @@ export default function ReposPage({
           </ul>
         )}
       </Card>
-      <p className="text-xs text-slate-500">
-        Garde-fous actifs&nbsp;: branches protégées bloquées · dry-run obligatoire · backup automatique avant
-        application · aucune action IA automatique · secrets au coffre du système.
-      </p>
+      <p className="text-xs text-slate-500">{t("repo.guardrails")}</p>
 
       {removing && (
         <Modal
-          title={`Retirer « ${removing.name} » du workspace ?`}
+          title={t("repo.removeTitle").replace("{n}", removing.name)}
           onClose={() => setRemoving(null)}
           footer={
             <>
               <Button onClick={() => setRemoving(null)} autoFocus>
-                Annuler
+                {t("common.cancel")}
               </Button>
               <Button kind="danger" onClick={() => void remove(removing)}>
-                Retirer
+                {t("repo.remove")}
               </Button>
             </>
           }
         >
-          <p className="text-sm text-slate-300">
-            Seules les métadonnées locales (analyses, plans, propositions) sont concernées&nbsp;: le dépôt Git
-            sur disque n'est pas touché.
-          </p>
+          <p className="text-sm text-slate-300">{t("repo.removeBody")}</p>
         </Modal>
       )}
     </div>

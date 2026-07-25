@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { asIpcError, call } from "../ipc";
+import { t, useLang } from "../i18n";
 import type { AiProviderConfig, AiProviderKind, RepoRef } from "../types";
 import { Badge, Button, Card, Empty, ErrorBox, Field, inputCls, useToast } from "../ui";
 
@@ -9,6 +10,7 @@ export default function SettingsPage({
   repos: RepoRef[];
   onChanged: () => Promise<void>;
 }) {
+  useLang();
   const toast = useToast();
   const [providers, setProviders] = useState<AiProviderConfig[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +52,7 @@ export default function SettingsPage({
       });
       setApiKey("");
       await refresh();
-      toast("success", "Fournisseur IA enregistré comme défaut" + (apiKey ? " — clé envoyée au coffre" : ""));
+      toast("success", t("set.ai.saved") + (apiKey ? t("set.ai.savedKey") : ""));
     } catch (e) { setError(asIpcError(e).message); }
   };
 
@@ -58,7 +60,7 @@ export default function SettingsPage({
     try {
       await call("ai_provider_remove", { id });
       await refresh();
-      toast("info", "Fournisseur retiré (clé purgée du coffre)");
+      toast("info", t("set.ai.removed"));
     } catch (e) { setError(asIpcError(e).message); }
   };
 
@@ -77,80 +79,73 @@ export default function SettingsPage({
         protectedBranches: protectedBranches.split(",").map((s) => s.trim()).filter(Boolean),
       });
       await onChanged();
-      toast("success", `Gouvernance de « ${r.name} » enregistrée`);
+      toast("success", t("set.gov.saved").replace("{n}", r.name));
     } catch (e) { setError(asIpcError(e).message); }
   };
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
       <ErrorBox error={error} />
-      <Card title="Fournisseur IA (propositions uniquement — jamais d'action automatique)">
+      <Card title={t("set.ai.title")}>
         <div className="grid grid-cols-4 gap-2">
-          <Field label="Type">
+          <Field label={t("set.ai.type")}>
             <select className={inputCls} value={kind} onChange={(e) => setKind(e.target.value as AiProviderKind)}>
-              <option value="rule_based">Assistant local déterministe (sans LLM)</option>
-              <option value="ollama">Ollama (LLM local)</option>
-              <option value="open_ai_compat">Endpoint d'entreprise (compatible OpenAI)</option>
-              <option value="anthropic">Anthropic</option>
+              <option value="rule_based">{t("set.ai.rule")}</option>
+              <option value="ollama">{t("set.ai.ollama")}</option>
+              <option value="open_ai_compat">{t("set.ai.compat")}</option>
+              <option value="anthropic">{t("set.ai.anthropic")}</option>
             </select>
           </Field>
-          <Field label="URL de base"><input className={inputCls} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} disabled={kind === "rule_based"} /></Field>
-          <Field label="Modèle"><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} disabled={kind === "rule_based"} /></Field>
-          <Field label="Clé d'API (coffre OS)">
+          <Field label={t("set.ai.baseUrl")}><input className={inputCls} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} disabled={kind === "rule_based"} /></Field>
+          <Field label={t("set.ai.model")}><input className={inputCls} value={model} onChange={(e) => setModel(e.target.value)} disabled={kind === "rule_based"} /></Field>
+          <Field label={t("set.ai.key")}>
             <input type="password" className={inputCls} value={apiKey} onChange={(e) => setApiKey(e.target.value)} disabled={kind === "rule_based" || kind === "ollama"} />
           </Field>
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <Button kind="primary" onClick={saveProvider}>Définir comme fournisseur par défaut</Button>
-          <span className="text-xs text-slate-500">
-            Sans fournisseur configuré, l'assistant local déterministe est utilisé (100 % hors-ligne).
-            Tout envoi à un fournisseur distant exige un consentement explicite avec aperçu des données.
-          </span>
+          <Button kind="primary" onClick={saveProvider}>{t("set.ai.setDefault")}</Button>
+          <span className="text-xs text-slate-500">{t("set.ai.hint")}</span>
         </div>
         {providers.length > 0 && (
           <ul className="mt-3 space-y-1 text-sm">
             {providers.map((p) => (
               <li key={p.id} className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/50 px-2.5 py-1.5">
-                <Badge tone={p.is_default ? "teal" : "slate"}>{p.is_default ? "défaut" : "secondaire"}</Badge>
+                <Badge tone={p.is_default ? "teal" : "slate"}>{p.is_default ? t("set.ai.default") : t("set.ai.secondary")}</Badge>
                 <span className="flex-1 text-slate-200">{p.kind} · {p.model ?? "—"} · {p.base_url ?? "—"}</span>
-                <span className="text-xs text-slate-500">{p.key_ref ? "clé au coffre" : "sans clé"}</span>
-                <Button kind="danger" onClick={() => removeProvider(p.id)}>retirer</Button>
+                <span className="text-xs text-slate-500">{p.key_ref ? t("set.ai.keyVault") : t("set.ai.noKey")}</span>
+                <Button kind="danger" onClick={() => removeProvider(p.id)}>{t("set.ai.remove")}</Button>
               </li>
             ))}
           </ul>
         )}
       </Card>
 
-      <Card title="Gouvernance par dépôt">
+      <Card title={t("set.gov.title")}>
         {repos.length === 0 ? (
-          <Empty>Déclarer un dépôt d'abord.</Empty>
+          <Empty>{t("set.gov.declareFirst")}</Empty>
         ) : (
           <div className="space-y-2.5">
-            <Field label="Dépôt">
+            <Field label={t("set.gov.repo")}>
               <select className={inputCls} value={repoId} onChange={(e) => setRepoId(e.target.value)}>
                 {repos.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
             </Field>
-            <Field label="Politique d'attribution IA">
+            <Field label={t("set.gov.policy")}>
               <select className={inputCls} value={policy} onChange={(e) => setPolicy(e.target.value as typeof policy)}>
-                <option value="keep-required">keep-required — traçabilité IA exigée&nbsp;: la skill de nettoyage REFUSE (défaut)</option>
-                <option value="normalization-allowed">normalization-allowed — normalisation des mentions autorisée</option>
+                <option value="keep-required">{t("set.gov.keepRequired")}</option>
+                <option value="normalization-allowed">{t("set.gov.normAllowed")}</option>
               </select>
             </Field>
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Branches protégées (virgules)">
+              <Field label={t("set.gov.protectedBranches")}>
                 <input className={inputCls} value={protectedBranches} onChange={(e) => setProtectedBranches(e.target.value)} />
               </Field>
-              <Field label="Trailers protégés — jamais supprimés (virgules)">
+              <Field label={t("set.gov.protectedTrailers")}>
                 <input className={inputCls} value={trailers} onChange={(e) => setTrailers(e.target.value)} />
               </Field>
             </div>
-            <p className="text-xs text-slate-500">
-              La normalisation des messages est soumise à ces règles&nbsp;: si la politique du dépôt impose la
-              traçabilité des contributions assistées, l'application refuse la suppression et l'explique.
-              Chaque normalisation appliquée est journalisée avec le contenu retiré.
-            </p>
-            <Button kind="primary" onClick={saveGovernance}>Enregistrer la gouvernance</Button>
+            <p className="text-xs text-slate-500">{t("set.gov.note")}</p>
+            <Button kind="primary" onClick={saveGovernance}>{t("set.gov.save")}</Button>
           </div>
         )}
       </Card>
