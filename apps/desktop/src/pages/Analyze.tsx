@@ -436,6 +436,15 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
 
   if (!scan) return <p className="text-sm text-slate-500">{error ?? t("an.analyzing")}</p>;
 
+  // C2 : commits SIGNALÉS (message faible ou non conforme) — normalisables en lot.
+  const flaggedShas = [
+    ...new Set(
+      scan.report.flags
+        .filter((f) => f.kind === "weak_message" || f.kind === "non_conventional")
+        .map((f) => f.sha),
+    ),
+  ];
+
   const statusBadge = plan && (
     <Badge
       tone={
@@ -583,6 +592,15 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 title={t("an.suggestTitle")}
               >
                 {t("an.suggestMerges")} ({scan.squash_suggestions.length})
+              </Button>
+            )}
+            {flaggedShas.length > 0 && (
+              <Button
+                onClick={() => void generate(false, flaggedShas.map((s) => [s]))}
+                loading={busy}
+                title={t("an.normalizeAllHint")}
+              >
+                <Sparkles size={ICON_SM} /> {t("an.normalizeAll")} ({flaggedShas.length})
               </Button>
             )}
           </>

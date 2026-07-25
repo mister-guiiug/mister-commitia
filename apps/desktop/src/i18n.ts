@@ -289,6 +289,11 @@ const STRINGS: Record<string, Entry> = {
   "an.propose": { fr: "Proposer", en: "Propose" },
   "an.suggestMerges": { fr: "Suggérer des fusions", en: "Suggest merges" },
   "an.suggestTitle": { fr: "Groupes suggérés par l'heuristique locale", en: "Groups suggested by the local heuristic" },
+  "an.normalizeAll": { fr: "Normaliser les signalés", en: "Normalize flagged" },
+  "an.normalizeAllHint": {
+    fr: "Génère une proposition pour CHAQUE commit au message faible ou non conforme, en une seule passe (skill courante).",
+    en: "Generates a proposal for EACH weak or non-conforming commit, in one pass (current skill).",
+  },
   "an.col.subject": { fr: "Sujet", en: "Subject" },
   "an.col.author": { fr: "Auteur · date", en: "Author · date" },
   "an.col.diff": { fr: "Diff", en: "Diff" },
