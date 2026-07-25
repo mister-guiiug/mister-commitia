@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 "#;
 
+/// Migration 2 (B3) : point de reprise persistant des suppressions/purges en
+/// masse — survit à un crash ou un redémarrage de l'application.
+const MIGRATION_2: &str = "\
+CREATE TABLE IF NOT EXISTS batch_checkpoint (
+    scope  TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    PRIMARY KEY (scope, run_id)
+);";
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -90,7 +99,7 @@ impl Store {
 
     /// Migrations versionnées, appliquées en transaction dans l'ordre.
     /// N'ÉDITEZ JAMAIS une migration publiée : ajoutez-en une nouvelle.
-    const MIGRATIONS: &'static [(i64, &'static str)] = &[(1, SCHEMA)];
+    const MIGRATIONS: &'static [(i64, &'static str)] = &[(1, SCHEMA), (2, MIGRATION_2)];
 
     fn init(mut conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
@@ -125,6 +134,34 @@ impl Store {
             [],
             |r| r.get(0),
         )?)
+    }
+
+    // -- Point de reprise des opérations en masse (B3) -----------------------
+
+    /// Run_id déjà traités pour ce périmètre (scope_hash) — persistant.
+    pub fn checkpoint_list(&self, scope: &str) -> Result<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT run_id FROM batch_checkpoint WHERE scope = ?1")?;
+        let rows = stmt.query_map(params![scope], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    /// Marque un run comme traité (idempotent).
+    pub fn checkpoint_add(&self, scope: &str, run_id: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT OR IGNORE INTO batch_checkpoint (scope, run_id) VALUES (?1, ?2)",
+            params![scope, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Efface le point de reprise d'un périmètre (opération terminée).
+    pub fn checkpoint_clear(&self, scope: &str) -> Result<()> {
+        self.conn().execute(
+            "DELETE FROM batch_checkpoint WHERE scope = ?1",
+            params![scope],
+        )?;
+        Ok(())
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {

@@ -687,3 +687,98 @@ async fn b2_azdo_purge_artifacts() {
     // Les logs AzDO ne sont pas purgeables séparément.
     assert!(client.delete_run_logs(&r).await.is_err());
 }
+
+/// B3 : le point de reprise de la suppression en masse est PERSISTÉ. Un lot
+/// annulé après la 1re suppression laisse un checkpoint en base ; un lot
+/// ULTÉRIEUR (already_done vide, comme après un redémarrage) le recharge et ne
+/// re-supprime pas ce qui l'a déjà été.
+#[tokio::test]
+async fn b3_batch_checkpoint_persists_across_calls() {
+    std::env::set_var("MC_SECRETS_MODE", "memory");
+    let server = MockServer::start();
+    server.add("GET", "/repos/o/r", 200, &[], r#"{"full_name":"o/r"}"#);
+    server.add(
+        "GET",
+        "/repos/o/r/actions/runs",
+        200,
+        &[],
+        &github_runs_json(),
+    );
+    server.add("DELETE", "/repos/o/r/actions/runs/101", 204, &[], "");
+    server.add("DELETE", "/repos/o/r/actions/runs/102", 204, &[], "");
+
+    let core = mc_core::Core::in_memory(common::skills_dir()).unwrap();
+    let (acct, _) = core
+        .ci_account_add(
+            CiKind::Github,
+            server.base_url(),
+            Some("o".into()),
+            None,
+            Some("r".into()),
+            "tok-b3".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    let policy = core
+        .policy_save(
+            "tout".into(),
+            RetentionRules {
+                max_age_days: None,
+                keep_last_per_pipeline: 0,
+                protect_branches: vec![],
+                protect_failed: false,
+            },
+        )
+        .unwrap();
+    let report = core.ci_simulate(&acct.id, &policy.id, 500).await.unwrap();
+    assert_eq!(report.candidates.len(), 2);
+
+    // 1er lot : annulation dès la 1re émission → 101 supprimé (checkpoint), 102 non.
+    let cancel = CancelToken::new();
+    let trig = cancel.clone();
+    let ctx = TaskCtx::new("ci_delete_batch", "t-b3", cancel, move |p| {
+        if let TaskEvent::Progress { current, .. } = p.event {
+            if current == 0 {
+                trig.cancel();
+            }
+        }
+    });
+    let res = core
+        .ci_delete_batch(
+            &acct.id,
+            &policy.id,
+            report.candidates.clone(),
+            "2".into(),
+            vec![],
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert!(res.cancelled);
+    assert_eq!(res.deleted, vec!["101".to_string()]);
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/runs/101"), 1);
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/runs/102"), 0);
+
+    // 2e lot FRAIS (already_done vide) : le checkpoint persisté (101) est chargé,
+    // seul 102 reste → confirmer « 1 ».
+    let res2 = core
+        .ci_delete_batch(
+            &acct.id,
+            &policy.id,
+            report.candidates.clone(),
+            "1".into(),
+            vec![],
+            &TaskCtx::noop("b3-2"),
+        )
+        .await
+        .unwrap();
+    assert!(!res2.cancelled);
+    assert!(res2.deleted.contains(&"101".to_string()) && res2.deleted.contains(&"102".to_string()));
+    assert_eq!(
+        server.hits("DELETE", "/repos/o/r/actions/runs/101"),
+        1,
+        "101 n'est PAS re-supprimé (checkpoint persisté)"
+    );
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/runs/102"), 1);
+}

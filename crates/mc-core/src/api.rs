@@ -1390,7 +1390,10 @@ impl Core {
             )
         })?;
 
+        // B3 : le point de reprise est PERSISTÉ (survit à un crash/redémarrage) —
+        // on repart du checkpoint en base fusionné avec ce que fournit l'appelant.
         let mut deleted: std::collections::HashSet<String> = already_done.into_iter().collect();
+        deleted.extend(self.store.checkpoint_list(&scope)?);
         let pending: Vec<CiRun> = runs
             .into_iter()
             .filter(|r| !deleted.contains(&r.run_id))
@@ -1447,6 +1450,7 @@ impl Core {
                 match client.delete_run(run).await {
                     Ok(()) => {
                         deleted.insert(run.run_id.clone());
+                        let _ = self.store.checkpoint_add(&scope, &run.run_id);
                         self.audit(
                             "ci_cleanup",
                             "delete",
@@ -1487,6 +1491,12 @@ impl Core {
                     }
                 }
             }
+        }
+
+        // B3 : lot ENTIÈREMENT traité (ni annulé ni échec) → efface le point de
+        // reprise persistant. Sinon on le CONSERVE pour reprendre après coup.
+        if !cancelled && failed.is_empty() {
+            let _ = self.store.checkpoint_clear(&scope);
         }
 
         self.audit(
