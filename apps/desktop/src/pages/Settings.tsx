@@ -24,6 +24,7 @@ export default function SettingsPage({
   const [policy, setPolicy] = useState<"keep-required" | "normalization-allowed">("keep-required");
   const [protectedBranches, setProtectedBranches] = useState("");
   const [trailers, setTrailers] = useState("Signed-off-by");
+  const [resign, setResign] = useState(false);
 
   const refresh = async () => setProviders(await call<AiProviderConfig[]>("ai_provider_list"));
   useEffect(() => { void refresh(); }, []);
@@ -34,6 +35,7 @@ export default function SettingsPage({
       setPolicy(r.governance.ai_attribution_policy);
       setProtectedBranches(r.protected_branches.join(", "));
       setTrailers(r.governance.protected_trailers.join(", "));
+      setResign(r.governance.resign_after_rewrite ?? false);
     }
   }, [repoId, repos]);
 
@@ -75,6 +77,7 @@ export default function SettingsPage({
           ...r.governance,
           ai_attribution_policy: policy,
           protected_trailers: trailers.split(",").map((s) => s.trim()).filter(Boolean),
+          resign_after_rewrite: resign,
         },
         protectedBranches: protectedBranches.split(",").map((s) => s.trim()).filter(Boolean),
       });
@@ -144,6 +147,18 @@ export default function SettingsPage({
                 <input className={inputCls} value={trailers} onChange={(e) => setTrailers(e.target.value)} />
               </Field>
             </div>
+            <label className="flex items-start gap-2 text-sm text-slate-300">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={resign}
+                onChange={(e) => setResign(e.target.checked)}
+              />
+              <span>
+                {t("set.gov.resign")}
+                <span className="mt-0.5 block text-xs text-slate-500">{t("set.gov.resignHint")}</span>
+              </span>
+            </label>
             <p className="text-xs text-slate-500">{t("set.gov.note")}</p>
             <Button kind="primary" onClick={saveGovernance}>{t("set.gov.save")}</Button>
           </div>

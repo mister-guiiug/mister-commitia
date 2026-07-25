@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
 use crate::gitx::rewrite::{self, TodoGroup};
-use crate::gitx::GitEngine;
+use crate::gitx::{sign, GitEngine};
 use crate::model::*;
 use crate::task::TaskCtx;
 
@@ -535,6 +535,35 @@ impl PlanEngine {
                     .collect::<Vec<_>>();
                 (h2, mapping)
             }
+        };
+
+        // B1 : re-signature optionnelle des commits réécrits. La réécriture
+        // produit des commits NON signés (git2 ne signe pas, et le sequencer
+        // désactive la signature) ; si la gouvernance l'exige ET qu'une clé est
+        // configurée dans le dépôt, on recrée le segment signé. Sans clé : no-op.
+        let (final_tip, mapping) = if repo_ref.governance.resign_after_rewrite {
+            match sign::signer_from_config(repo)? {
+                Some(signer) => {
+                    ctx.step("re-signature des commits", 0, None)?;
+                    let (signed_tip, sign_map) =
+                        sign::sign_segment(repo, base, final_tip, &signer)?;
+                    let mapping = mapping
+                        .into_iter()
+                        .map(|mut m| {
+                            if let Ok(oid) = Oid::from_str(&m.new) {
+                                if let Some(s) = sign_map.get(&oid) {
+                                    m.new = s.to_string();
+                                }
+                            }
+                            m
+                        })
+                        .collect::<Vec<_>>();
+                    (signed_tip, mapping)
+                }
+                None => (final_tip, mapping),
+            }
+        } else {
+            (final_tip, mapping)
         };
 
         ctx.step("contrôle des invariants et écriture de la préview", 0, None)?;

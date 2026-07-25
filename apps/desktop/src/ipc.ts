@@ -94,6 +94,7 @@ const gov = {
   ai_attribution_policy: "keep-required" as const,
   signature_patterns: ["Generated with Claude Code", "Co-Authored-By: Claude <noreply@anthropic.com>"],
   convention_types: ["feat", "fix", "refactor", "chore", "docs", "test", "ci", "perf", "build", "style", "revert"],
+  resign_after_rewrite: false,
 };
 
 const demoRepo: RepoRef = {

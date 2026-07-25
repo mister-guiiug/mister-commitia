@@ -959,6 +959,80 @@ fn a2_squash_must_preserve_protected_trailers() {
     assert_eq!(plan.status, PlanStatus::DryRunOk);
 }
 
+/// B1 : re-signature des commits réécrits. Avec `resign_after_rewrite` activé et
+/// une clé SSH configurée dans le dépôt, la préview du dry-run est SIGNÉE.
+/// Nécessite `ssh-keygen` (OpenSSH) — ignoré proprement s'il est absent du PATH.
+#[test]
+fn b1_resign_after_rewrite_signs_preview() {
+    let f = init_repo();
+    let key = f.dir.path().join("id_ed25519");
+    let gen = std::process::Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-N", "", "-q", "-f"])
+        .arg(&key)
+        .status();
+    if !matches!(gen, Ok(s) if s.success()) {
+        eprintln!("ssh-keygen indisponible — b1_resign_after_rewrite_signs_preview ignoré");
+        return;
+    }
+    {
+        let mut cfg = f.repo.config().unwrap();
+        cfg.set_str("gpg.format", "ssh").unwrap();
+        cfg.set_str("user.signingkey", key.to_str().unwrap())
+            .unwrap();
+    }
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n")],
+        "chore: init",
+        1_700_000_000,
+    );
+    checkout_new_branch(&f.repo, "feature/x");
+    let c1 = commit(&f.repo, &[("a.txt", "1\n")], "wip", 1_700_000_100);
+
+    let (core, repo_id) = core_with(&f);
+    let r = core
+        .repo_list()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == repo_id)
+        .unwrap();
+    let mut gov = r.governance.clone();
+    gov.resign_after_rewrite = true;
+    core.repo_update_governance(&repo_id, gov, r.protected_branches.clone())
+        .unwrap();
+
+    let plan = core.plan_new(&repo_id, "feature/x").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Reword {
+                    target: c1.to_string(),
+                    new_message: "feat: renamed".into(),
+                },
+            )],
+        )
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+
+    let preview = f
+        .repo
+        .refname_to_id(plan.preview_ref.as_ref().unwrap())
+        .unwrap();
+    assert!(
+        f.repo.extract_signature(&preview, None).is_ok(),
+        "le commit réécrit doit porter une signature"
+    );
+    assert!(f
+        .repo
+        .find_commit(preview)
+        .unwrap()
+        .message()
+        .unwrap()
+        .contains("renamed"));
+}
+
 proptest! {
     // A1 : proptest sur les OPÉRATIONS GIT RÉELLES (au-delà du compilateur pur).
     // Sur un dépôt linéaire synthétique, un plan aléatoire (reword/drop/reorder)

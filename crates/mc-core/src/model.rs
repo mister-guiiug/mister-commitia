@@ -60,6 +60,11 @@ pub struct Governance {
     pub signature_patterns: Vec<String>,
     #[serde(default = "default_convention_types")]
     pub convention_types: Vec<String>,
+    /// Re-signe les commits produits par la réécriture si une clé de signature
+    /// est configurée dans le dépôt (`user.signingkey` + `gpg.format`) — évite
+    /// que la réécriture ne fasse perdre les signatures (B1). Défaut : off.
+    #[serde(default)]
+    pub resign_after_rewrite: bool,
 }
 
 impl Default for Governance {
@@ -69,6 +74,7 @@ impl Default for Governance {
             ai_attribution_policy: AiAttributionPolicy::default(),
             signature_patterns: default_signature_patterns(),
             convention_types: default_convention_types(),
+            resign_after_rewrite: false,
         }
     }
 }
