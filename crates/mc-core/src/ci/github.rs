@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::error::{CoreError, Result};
-use crate::model::{CiAccount, CiRun, PrRef};
+use crate::model::{CiAccount, CiArtifact, CiRun, PrRef};
 use crate::task::TaskCtx;
 
 use super::platform_error;
@@ -172,6 +172,95 @@ impl GithubCi {
                 &headers,
                 &body,
                 "suppression du run GitHub",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Artefacts d'un run (F7 : purge de stockage). Paginé (100/page).
+    pub async fn run_artifacts(&self, run_id: &str) -> Result<Vec<CiArtifact>> {
+        let mut out = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let url = format!(
+                "{}/repos/{}/{}/actions/runs/{}/artifacts?per_page=100&page={page}",
+                self.base, self.owner, self.repo, run_id
+            );
+            let resp = self.req(reqwest::Method::GET, url).send().await?;
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                return Err(platform_error(
+                    status,
+                    &headers,
+                    &body,
+                    "liste des artefacts GitHub",
+                ));
+            }
+            let v: Value = serde_json::from_str(&body)?;
+            let arr = v["artifacts"].as_array().cloned().unwrap_or_default();
+            if arr.is_empty() {
+                break;
+            }
+            for a in &arr {
+                out.push(CiArtifact {
+                    id: a["id"].as_i64().map(|x| x.to_string()).unwrap_or_default(),
+                    name: a["name"].as_str().unwrap_or("(artefact)").to_string(),
+                    size_bytes: a["size_in_bytes"].as_u64().unwrap_or(0),
+                });
+            }
+            if arr.len() < 100 {
+                break;
+            }
+            page += 1;
+        }
+        Ok(out)
+    }
+
+    /// Supprime un artefact par id (F7). 404 ⇒ déjà absent, considéré comme fait.
+    pub async fn delete_artifact(&self, artifact_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/repos/{}/{}/actions/artifacts/{}",
+            self.base, self.owner, self.repo, artifact_id
+        );
+        let resp = self.req(reqwest::Method::DELETE, url).send().await?;
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            return Ok(());
+        }
+        let headers = resp.headers().clone();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "suppression d'un artefact GitHub",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Supprime les logs d'un run (F7). 404 ⇒ déjà absents, considéré comme fait.
+    pub async fn delete_run_logs(&self, run_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/repos/{}/{}/actions/runs/{}/logs",
+            self.base, self.owner, self.repo, run_id
+        );
+        let resp = self.req(reqwest::Method::DELETE, url).send().await?;
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            return Ok(());
+        }
+        let headers = resp.headers().clone();
+        let body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(platform_error(
+                status,
+                &headers,
+                &body,
+                "suppression des logs GitHub",
             ));
         }
         Ok(())

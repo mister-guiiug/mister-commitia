@@ -115,6 +115,18 @@ pub struct BatchDeleteResult {
     pub cancelled: bool,
 }
 
+/// Résultat d'une purge de logs/artefacts (F7, extension) : reclaim de stockage
+/// qui CONSERVE les runs. Les runs en cours sont ignorés ; les échecs par run
+/// sont collectés sans interrompre le reste du lot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurgeResult {
+    pub runs: usize,
+    pub artifacts_deleted: usize,
+    pub logs_deleted: usize,
+    pub failed: Vec<BatchFailure>,
+    pub cancelled: bool,
+}
+
 impl Core {
     pub fn new(db_path: &Path, skills_dir: PathBuf) -> Result<Self> {
         Ok(Self {
@@ -1491,6 +1503,183 @@ impl Core {
             failed,
             cancelled,
         })
+    }
+
+    /// Purge des logs/artefacts CI (F7, extension) : reclaim de STOCKAGE qui
+    /// CONSERVE les runs (contrairement à la suppression). Un run en cours est
+    /// toujours ignoré. Confirmation par le NOMBRE de runs ciblés ; progression
+    /// et annulation coopérative (résultat partiel). Les échecs par run sont
+    /// collectés sans interrompre le lot. GitHub uniquement (AzDO renvoie une
+    /// erreur par run, collectée comme échec).
+    pub async fn ci_purge_assets(
+        &self,
+        account_id: &str,
+        runs: Vec<CiRun>,
+        purge_logs: bool,
+        purge_artifacts: bool,
+        confirm: String,
+        ctx: &TaskCtx,
+    ) -> Result<PurgeResult> {
+        if !purge_logs && !purge_artifacts {
+            return Err(CoreError::Invalid(
+                "rien à purger : activer les logs et/ou les artefacts".into(),
+            ));
+        }
+        let (account, client) = self.client_for(account_id)?;
+
+        // Un run en cours d'exécution n'est jamais purgé.
+        let targets: Vec<CiRun> = runs.into_iter().filter(|r| !r.running).collect();
+        let expected = targets.len().to_string();
+        if confirm != expected {
+            return Err(CoreError::ConfirmRequired {
+                expected: expected.clone(),
+                message: format!(
+                    "purge des logs/artefacts : saisir exactement « {expected} » (nombre de runs) pour confirmer"
+                ),
+            });
+        }
+
+        self.audit(
+            "ci_cleanup",
+            "purge_start",
+            &account.base_url,
+            json!({"runs": targets.len(), "logs": purge_logs, "artefacts": purge_artifacts}),
+            "début",
+        );
+
+        let total = targets.len() as u64;
+        let mut res = PurgeResult {
+            runs: 0,
+            artifacts_deleted: 0,
+            logs_deleted: 0,
+            failed: Vec::new(),
+            cancelled: false,
+        };
+
+        'lot: for (i, run) in targets.iter().enumerate() {
+            if ctx.cancel.is_cancelled() {
+                res.cancelled = true;
+                break;
+            }
+            ctx.emit("purge des logs/artefacts", i as u64, Some(total));
+            self.audit(
+                "ci_cleanup",
+                "purge_attempt",
+                &account.base_url,
+                json!({"run": run.run_id, "logs": purge_logs, "artefacts": purge_artifacts}),
+                "tentative",
+            );
+
+            let mut run_errors: Vec<String> = Vec::new();
+            let mut run_arts = 0usize;
+            let mut run_logs = 0usize;
+
+            if purge_artifacts {
+                match client.run_artifacts(run).await {
+                    Ok(arts) => {
+                        for a in arts {
+                            // Un essai + une reprise sur 429 (attente annulable).
+                            for attempt in 0..2 {
+                                match client.delete_artifact(&a.id).await {
+                                    Ok(()) => {
+                                        run_arts += 1;
+                                        break;
+                                    }
+                                    Err(CoreError::RateLimited { retry_after_secs })
+                                        if attempt == 0 =>
+                                    {
+                                        ctx.emit(
+                                            &format!(
+                                                "throttling (429) — attente {retry_after_secs}s"
+                                            ),
+                                            i as u64,
+                                            Some(total),
+                                        );
+                                        if sleep_cancellable(retry_after_secs, &ctx.cancel)
+                                            .await
+                                            .is_err()
+                                        {
+                                            res.cancelled = true;
+                                            break 'lot;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        run_errors.push(format!("artefact {} : {e}", a.name));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => run_errors.push(format!("liste des artefacts : {e}")),
+                }
+            }
+
+            if purge_logs {
+                for attempt in 0..2 {
+                    match client.delete_run_logs(run).await {
+                        Ok(()) => {
+                            run_logs += 1;
+                            break;
+                        }
+                        Err(CoreError::RateLimited { retry_after_secs }) if attempt == 0 => {
+                            ctx.emit(
+                                &format!("throttling (429) — attente {retry_after_secs}s"),
+                                i as u64,
+                                Some(total),
+                            );
+                            if sleep_cancellable(retry_after_secs, &ctx.cancel)
+                                .await
+                                .is_err()
+                            {
+                                res.cancelled = true;
+                                break 'lot;
+                            }
+                        }
+                        Err(e) => {
+                            run_errors.push(format!("logs : {e}"));
+                            break;
+                        }
+                    }
+                }
+            }
+
+            res.artifacts_deleted += run_arts;
+            res.logs_deleted += run_logs;
+            res.runs += 1;
+            let outcome = if run_errors.is_empty() {
+                "ok".to_string()
+            } else {
+                res.failed.push(BatchFailure {
+                    run_id: run.run_id.clone(),
+                    reason: run_errors.join(" ; "),
+                });
+                "partiel".to_string()
+            };
+            self.audit(
+                "ci_cleanup",
+                "purge",
+                &account.base_url,
+                json!({"run": run.run_id, "artefacts": run_arts, "logs": run_logs}),
+                &outcome,
+            );
+        }
+
+        self.audit(
+            "ci_cleanup",
+            "purge_end",
+            &account.base_url,
+            json!({
+                "runs": res.runs,
+                "artefacts": res.artifacts_deleted,
+                "logs": res.logs_deleted,
+                "echecs": res.failed.len(),
+                "annule": res.cancelled,
+            }),
+            if res.cancelled { "annulé" } else { "ok" },
+        );
+
+        Ok(res)
     }
 
     pub fn job_list(&self) -> Result<Vec<CleanupJob>> {

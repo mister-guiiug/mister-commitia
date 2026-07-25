@@ -491,6 +491,34 @@ async fn ci_delete_batch(
     res
 }
 
+#[tauri::command]
+async fn ci_purge_assets(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
+    core: tauri::State<'_, ArcCore>,
+    account_id: String,
+    runs: Vec<CiRun>,
+    purge_logs: bool,
+    purge_artifacts: bool,
+    confirm: String,
+    task_id: Option<String>,
+) -> CmdResult<mc_core::api::PurgeResult> {
+    let ctx = task_ctx(&app, &tasks, "ci_purge_assets", &task_id);
+    let res = core
+        .ci_purge_assets(
+            &account_id,
+            runs,
+            purge_logs,
+            purge_artifacts,
+            confirm,
+            &ctx,
+        )
+        .await
+        .map_err(err);
+    task_done(&tasks, &task_id);
+    res
+}
+
 // ---------------------------------------------------------------------------
 // E7 — audit
 // ---------------------------------------------------------------------------
@@ -624,6 +652,7 @@ fn main() {
             ci_simulate,
             ci_delete_run,
             ci_delete_batch,
+            ci_purge_assets,
             audit_list,
             audit_export,
             task_cancel

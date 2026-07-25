@@ -439,6 +439,102 @@ async fn f7_batch_delete_throttles_and_resumes() {
     );
 }
 
+/// F7 (extension) : purge des logs/artefacts d'un run — reclaim de STOCKAGE qui
+/// CONSERVE le run. Confirmation par le nombre de runs ; artefacts listés puis
+/// supprimés, logs supprimés ; un run en cours est ignoré ; AzDO non couvert.
+#[tokio::test]
+async fn f7_purge_logs_and_artifacts() {
+    std::env::set_var("MC_SECRETS_MODE", "memory");
+    let server = MockServer::start();
+    server.add("GET", "/repos/o/r", 200, &[], r#"{"full_name":"o/r"}"#);
+    server.add(
+        "GET",
+        "/repos/o/r/actions/runs/101/artifacts",
+        200,
+        &[],
+        r#"{"total_count":2,"artifacts":[
+            {"id":501,"name":"logs.zip","size_in_bytes":1234},
+            {"id":502,"name":"bin","size_in_bytes":5678}]}"#,
+    );
+    server.add("DELETE", "/repos/o/r/actions/artifacts/501", 204, &[], "");
+    server.add("DELETE", "/repos/o/r/actions/artifacts/502", 204, &[], "");
+    server.add("DELETE", "/repos/o/r/actions/runs/101/logs", 204, &[], "");
+
+    let core = mc_core::Core::in_memory(common::skills_dir()).unwrap();
+    let (acct, _) = core
+        .ci_account_add(
+            CiKind::Github,
+            server.base_url(),
+            Some("o".into()),
+            None,
+            Some("r".into()),
+            "token-de-test-purge".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    let target = run("101", "9", 10, false, false);
+
+    // Confirmation invalide (1 run ciblé attendu) → refus typé.
+    let err = core
+        .ci_purge_assets(
+            &acct.id,
+            vec![target.clone()],
+            true,
+            true,
+            "9".into(),
+            &TaskCtx::noop("purge"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "confirm_required");
+    assert_eq!(err.expected(), Some("1"));
+
+    // Confirmation exacte → 2 artefacts + 1 log purgés, run conservé.
+    let res = core
+        .ci_purge_assets(
+            &acct.id,
+            vec![target.clone()],
+            true,
+            true,
+            "1".into(),
+            &TaskCtx::noop("purge"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.artifacts_deleted, 2);
+    assert_eq!(res.logs_deleted, 1);
+    assert_eq!(res.runs, 1);
+    assert!(res.failed.is_empty());
+    assert!(!res.cancelled);
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/artifacts/501"), 1);
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/artifacts/502"), 1);
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/runs/101/logs"), 1);
+
+    // Un run en cours est ignoré (0 ciblé → confirmer « 0 »).
+    let running = run("102", "9", 1, false, true);
+    let res = core
+        .ci_purge_assets(
+            &acct.id,
+            vec![running],
+            true,
+            true,
+            "0".into(),
+            &TaskCtx::noop("purge"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.runs, 0);
+
+    // Azure DevOps : la purge d'artefacts n'est pas couverte par ce chemin.
+    let az = account(&server.base_url(), CiKind::AzureDevops);
+    let azc = mc_core::ci::CiClient::from_account(&az, "t".into()).unwrap();
+    assert!(
+        azc.run_artifacts(&target).await.is_err(),
+        "AzDO non couvert"
+    );
+}
+
 /// F4 : détection des PR ouvertes via l'API GitHub (push assisté) ; Azure
 /// DevOps n'est pas couvert par ce chemin.
 #[tokio::test]

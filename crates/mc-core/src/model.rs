@@ -335,6 +335,15 @@ pub struct CiRun {
     pub running: bool,
 }
 
+/// Artefact d'un run CI (F7 : purge de stockage). `size_bytes` sert à afficher
+/// le volume récupérable avant la suppression.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiArtifact {
+    pub id: String,
+    pub name: String,
+    pub size_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetentionRules {
     pub max_age_days: Option<u32>,

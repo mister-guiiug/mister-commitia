@@ -74,6 +74,36 @@ impl CiClient {
             CiClient::AzDo(c) => c.delete_run(run).await,
         }
     }
+
+    /// Artefacts d'un run (F7). Azure DevOps n'est pas couvert par ce chemin.
+    pub async fn run_artifacts(&self, run: &CiRun) -> Result<Vec<CiArtifact>> {
+        match self {
+            CiClient::Github(c) => c.run_artifacts(&run.run_id).await,
+            CiClient::AzDo(_) => Err(CoreError::Invalid(
+                "purge des artefacts non implémentée pour Azure DevOps".into(),
+            )),
+        }
+    }
+
+    /// Supprime un artefact par id (F7).
+    pub async fn delete_artifact(&self, artifact_id: &str) -> Result<()> {
+        match self {
+            CiClient::Github(c) => c.delete_artifact(artifact_id).await,
+            CiClient::AzDo(_) => Err(CoreError::Invalid(
+                "purge des artefacts non implémentée pour Azure DevOps".into(),
+            )),
+        }
+    }
+
+    /// Supprime les logs d'un run (F7).
+    pub async fn delete_run_logs(&self, run: &CiRun) -> Result<()> {
+        match self {
+            CiClient::Github(c) => c.delete_run_logs(&run.run_id).await,
+            CiClient::AzDo(_) => Err(CoreError::Invalid(
+                "purge des logs non implémentée pour Azure DevOps".into(),
+            )),
+        }
+    }
 }
 
 /// Interprète une réponse HTTP de plateforme en erreur exploitable :
