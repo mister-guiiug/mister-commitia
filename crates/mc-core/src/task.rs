@@ -135,3 +135,16 @@ impl TaskCtx {
         });
     }
 }
+
+/// Attente ANNULABLE (tranches de 100 ms) — pour les backoffs (retry IA,
+/// throttling du nettoyage CI en masse). Erreur `cancelled` si annulé pendant.
+pub async fn sleep_cancellable(secs: u64, cancel: &CancelToken) -> Result<()> {
+    let mut remaining_ms = secs.saturating_mul(1000);
+    while remaining_ms > 0 {
+        cancel.check()?;
+        let tick = remaining_ms.min(100);
+        tokio::time::sleep(std::time::Duration::from_millis(tick)).await;
+        remaining_ms -= tick;
+    }
+    cancel.check()
+}

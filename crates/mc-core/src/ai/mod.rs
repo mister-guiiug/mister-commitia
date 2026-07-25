@@ -5,7 +5,7 @@ use serde_json::Value;
 use crate::error::{CoreError, Result};
 use crate::model::*;
 use crate::skills::{GenOutcome, Skill};
-use crate::task::CancelToken;
+use crate::task::{sleep_cancellable, CancelToken};
 
 pub struct SkillContext<'a> {
     pub skill: &'a Skill,
@@ -63,18 +63,6 @@ const BATCH_TOKEN_BUDGET: u32 = 16_384;
 /// Budget par groupe pour un lot de `groups` groupes, borné [256, 1024].
 pub fn batch_max_tokens(groups: usize) -> u32 {
     (BATCH_TOKEN_BUDGET / groups.max(1) as u32).clamp(256, DEFAULT_MAX_TOKENS)
-}
-
-/// Attente annulable (tranches de 100 ms) — utilisée entre deux essais.
-async fn sleep_cancellable(secs: u64, cancel: &CancelToken) -> Result<()> {
-    let mut remaining_ms = secs.saturating_mul(1000);
-    while remaining_ms > 0 {
-        cancel.check()?;
-        let tick = remaining_ms.min(100);
-        tokio::time::sleep(std::time::Duration::from_millis(tick)).await;
-        remaining_ms -= tick;
-    }
-    cancel.check()
 }
 
 fn retry_after_secs(resp: &reqwest::Response) -> Option<u64> {

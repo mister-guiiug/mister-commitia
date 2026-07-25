@@ -332,6 +332,113 @@ async fn t2_inventory_progress_per_page_and_cancel_between_pages() {
     );
 }
 
+/// F7 : nettoyage CI EN MASSE — supprime le lot des candidats, résiste au
+/// throttling (429 → attente → reprise), confirmation par le nombre de runs,
+/// et un point de reprise évite de re-supprimer.
+#[tokio::test]
+async fn f7_batch_delete_throttles_and_resumes() {
+    std::env::set_var("MC_SECRETS_MODE", "memory");
+    let server = MockServer::start();
+    server.add("GET", "/repos/o/r", 200, &[], r#"{"full_name":"o/r"}"#);
+    server.add(
+        "GET",
+        "/repos/o/r/actions/runs",
+        200,
+        &[],
+        &github_runs_json(),
+    );
+    // Run 101 : throttlé (429, Retry-After 0) puis supprimé ; run 102 : direct.
+    server.add_seq(
+        "DELETE",
+        "/repos/o/r/actions/runs/101",
+        &[(429, &[("retry-after", "0")], "{}"), (204, &[], "")],
+    );
+    server.add("DELETE", "/repos/o/r/actions/runs/102", 204, &[], "");
+
+    let core = mc_core::Core::in_memory(common::skills_dir()).unwrap();
+    let (acct, _) = core
+        .ci_account_add(
+            CiKind::Github,
+            server.base_url(),
+            Some("o".into()),
+            None,
+            Some("r".into()),
+            "token-de-test-batch".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    let policy = core
+        .policy_save(
+            "tout".into(),
+            RetentionRules {
+                max_age_days: None,
+                keep_last_per_pipeline: 0,
+                protect_branches: vec![],
+                protect_failed: false,
+            },
+        )
+        .unwrap();
+    let report = core.ci_simulate(&acct.id, &policy.id, 500).await.unwrap();
+    assert_eq!(report.candidates.len(), 2, "les deux runs sont candidats");
+
+    // Confirmation invalide (mauvais nombre) → refus typé.
+    let err = core
+        .ci_delete_batch(
+            &acct.id,
+            &policy.id,
+            report.candidates.clone(),
+            "1".into(),
+            vec![],
+            &TaskCtx::noop("batch"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "confirm_required");
+    assert_eq!(err.expected(), Some("2"));
+
+    // Confirmation exacte (« 2 ») → tout supprimé, avec throttling sur 101.
+    let res = core
+        .ci_delete_batch(
+            &acct.id,
+            &policy.id,
+            report.candidates.clone(),
+            "2".into(),
+            vec![],
+            &TaskCtx::noop("batch"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.deleted.len(), 2);
+    assert!(res.failed.is_empty());
+    assert!(!res.cancelled);
+    assert_eq!(
+        server.hits("DELETE", "/repos/o/r/actions/runs/101"),
+        2,
+        "429 puis succès"
+    );
+    assert_eq!(server.hits("DELETE", "/repos/o/r/actions/runs/102"), 1);
+
+    // Reprise : avec 101 déjà fait, seul 102 reste (confirm « 1 ») — 101 non re-supprimé.
+    let res2 = core
+        .ci_delete_batch(
+            &acct.id,
+            &policy.id,
+            report.candidates.clone(),
+            "1".into(),
+            vec!["101".into()],
+            &TaskCtx::noop("batch"),
+        )
+        .await
+        .unwrap();
+    assert!(res2.deleted.contains(&"101".to_string()) && res2.deleted.contains(&"102".to_string()));
+    assert_eq!(
+        server.hits("DELETE", "/repos/o/r/actions/runs/101"),
+        2,
+        "101 n'est pas re-supprimé lors de la reprise"
+    );
+}
+
 /// F4 : détection des PR ouvertes via l'API GitHub (push assisté) ; Azure
 /// DevOps n'est pas couvert par ce chemin.
 #[tokio::test]

@@ -469,6 +469,27 @@ async fn ci_delete_run(
         .map_err(err)
 }
 
+#[tauri::command]
+async fn ci_delete_batch(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
+    core: tauri::State<'_, ArcCore>,
+    account_id: String,
+    policy_id: String,
+    runs: Vec<CiRun>,
+    confirm: String,
+    already_done: Vec<String>,
+    task_id: Option<String>,
+) -> CmdResult<mc_core::api::BatchDeleteResult> {
+    let ctx = task_ctx(&app, &tasks, "ci_delete_batch", &task_id);
+    let res = core
+        .ci_delete_batch(&account_id, &policy_id, runs, confirm, already_done, &ctx)
+        .await
+        .map_err(err);
+    task_done(&tasks, &task_id);
+    res
+}
+
 // ---------------------------------------------------------------------------
 // E7 — audit
 // ---------------------------------------------------------------------------
@@ -601,6 +622,7 @@ fn main() {
             policy_list,
             ci_simulate,
             ci_delete_run,
+            ci_delete_batch,
             audit_list,
             audit_export,
             task_cancel

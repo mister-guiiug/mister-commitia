@@ -18,7 +18,7 @@ use crate::plan::{plan_hash, PlanEngine, RiskAxis};
 use crate::secrets;
 use crate::skills::{self, GenOutcome, Skill};
 use crate::store::Store;
-use crate::task::TaskCtx;
+use crate::task::{sleep_cancellable, TaskCtx};
 
 pub struct Core {
     pub store: Store,
@@ -94,6 +94,25 @@ pub struct PushResult {
     pub forced: bool,
     pub remote_tip: String,
     pub detail: String,
+}
+
+/// Échec unitaire lors d'une suppression en masse (F7).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchFailure {
+    pub run_id: String,
+    pub reason: String,
+}
+
+/// Résultat d'un nettoyage CI en masse (F7). `deleted` inclut le point de
+/// reprise fourni : renvoyé tel quel, il permet de RELANCER pour terminer un
+/// lot annulé ou partiellement en échec sans re-supprimer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchDeleteResult {
+    pub total: usize,
+    pub deleted: Vec<String>,
+    pub failed: Vec<BatchFailure>,
+    /// Vrai si interrompu par l'utilisateur avant la fin (reprise possible).
+    pub cancelled: bool,
 }
 
 impl Core {
@@ -1299,6 +1318,147 @@ impl Core {
             &result,
         );
         outcome
+    }
+
+    /// Nettoyage CI EN MASSE (F7) : supprime chaque run du lot avec les mêmes
+    /// garde-fous que la suppression unitaire (simulation préalable requise ;
+    /// runs en cours / sous lease refusés côté client). Résiste au throttling
+    /// (429/Retry-After → attente annulable puis reprise), journalise chaque
+    /// run, émet la progression, et s'interrompt proprement sur annulation en
+    /// renvoyant un point de reprise (`deleted`) pour relancer sans doublon.
+    /// `confirm` doit valoir le NOMBRE de runs à supprimer (friction délibérée).
+    pub async fn ci_delete_batch(
+        &self,
+        account_id: &str,
+        policy_id: &str,
+        runs: Vec<CiRun>,
+        confirm: String,
+        already_done: Vec<String>,
+        ctx: &TaskCtx,
+    ) -> Result<BatchDeleteResult> {
+        let (account, client) = self.client_for(account_id)?;
+        let policy = self.store.policy_get(policy_id)?;
+        let scope = ci::scope_hash(&account, &policy);
+        let sim = self.store.last_simulation(&scope)?.ok_or_else(|| {
+            CoreError::Refused(
+                "aucune simulation préalable pour ce périmètre : exécuter la simulation d'abord"
+                    .into(),
+            )
+        })?;
+
+        let mut deleted: std::collections::HashSet<String> = already_done.into_iter().collect();
+        let pending: Vec<CiRun> = runs
+            .into_iter()
+            .filter(|r| !deleted.contains(&r.run_id))
+            .collect();
+
+        // Confirmation renforcée : saisir le nombre exact de runs restants.
+        let expected = pending.len().to_string();
+        if confirm != expected {
+            return Err(CoreError::ConfirmRequired {
+                expected: expected.clone(),
+                message: format!(
+                    "suppression en masse : saisir exactement « {expected} » (nombre de runs) pour confirmer"
+                ),
+            });
+        }
+
+        self.audit(
+            "ci_cleanup",
+            "batch_start",
+            &account.base_url,
+            json!({"policy": policy.name, "a_supprimer": pending.len(), "reprise": deleted.len()}),
+            "début",
+        );
+
+        let total = pending.len() as u64;
+        let mut failed: Vec<BatchFailure> = Vec::new();
+        let mut cancelled = false;
+
+        'lot: for (i, run) in pending.iter().enumerate() {
+            if ctx.cancel.is_cancelled() {
+                cancelled = true;
+                break;
+            }
+            ctx.emit("suppression des runs", i as u64, Some(total));
+
+            if !sim.candidates.iter().any(|c| c.run_id == run.run_id) {
+                failed.push(BatchFailure {
+                    run_id: run.run_id.clone(),
+                    reason: "hors des candidats de la simulation".into(),
+                });
+                continue;
+            }
+            self.audit(
+                "ci_cleanup",
+                "delete_attempt",
+                &account.base_url,
+                json!({"run": run.run_id, "pipeline": run.pipeline_name, "lot": true}),
+                "tentative",
+            );
+
+            // Throttling : jusqu'à 5 attentes sur 429/Retry-After.
+            let mut throttles = 0u32;
+            loop {
+                match client.delete_run(run).await {
+                    Ok(()) => {
+                        deleted.insert(run.run_id.clone());
+                        self.audit(
+                            "ci_cleanup",
+                            "delete",
+                            &account.base_url,
+                            json!({"run": run.run_id, "lot": true}),
+                            "ok",
+                        );
+                        break;
+                    }
+                    Err(CoreError::RateLimited { retry_after_secs }) if throttles < 5 => {
+                        throttles += 1;
+                        ctx.emit(
+                            &format!("throttling (429) — attente {retry_after_secs}s"),
+                            i as u64,
+                            Some(total),
+                        );
+                        if sleep_cancellable(retry_after_secs, &ctx.cancel)
+                            .await
+                            .is_err()
+                        {
+                            cancelled = true;
+                            break 'lot;
+                        }
+                    }
+                    Err(e) => {
+                        self.audit(
+                            "ci_cleanup",
+                            "delete",
+                            &account.base_url,
+                            json!({"run": run.run_id, "lot": true}),
+                            &format!("erreur : {e}"),
+                        );
+                        failed.push(BatchFailure {
+                            run_id: run.run_id.clone(),
+                            reason: e.to_string(),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.audit(
+            "ci_cleanup",
+            "batch_end",
+            &account.base_url,
+            json!({"supprimes": deleted.len(), "echecs": failed.len(), "annule": cancelled}),
+            if cancelled { "annulé" } else { "ok" },
+        );
+
+        Ok(BatchDeleteResult {
+            total: total as usize,
+            deleted: deleted.into_iter().collect(),
+            failed,
+            cancelled,
+        })
     }
 
     pub fn job_list(&self) -> Result<Vec<CleanupJob>> {
