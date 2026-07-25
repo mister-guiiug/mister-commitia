@@ -496,3 +496,45 @@ async fn azdo_inventory_marks_retained_runs() {
     assert_eq!(runs[0].branch.as_deref(), Some("main"));
     assert!(!runs[1].leased);
 }
+
+/// F12 : négociation de l'api-version Azure DevOps. Un Server on-prem qui refuse
+/// 7.1 (HTTP 400 « version hors plage ») fait basculer le client sur 7.0 ; la
+/// requête réussit après une unique reprise (deux hits sur le même chemin).
+#[tokio::test]
+async fn f12_azdo_api_version_negotiation() {
+    let server = MockServer::start();
+    let version_err = r#"{"message":"The requested REST API version of 7.1 is out of range for this server. The latest version supported by this server is 7.0."}"#;
+    server.add_seq(
+        "GET",
+        "/proj/_apis/build/builds",
+        &[
+            (400, &[], version_err),
+            (200, &[], r#"{"count":0,"value":[]}"#),
+        ],
+    );
+    let acct = account(&server.base_url(), CiKind::AzureDevopsServer);
+    let client = mc_core::ci::CiClient::from_account(&acct, "pat-secret-neg".into()).unwrap();
+    let msg = client.validate().await.unwrap();
+    assert!(msg.contains("proj"), "{msg}");
+    assert_eq!(
+        server.hits("GET", "/proj/_apis/build/builds"),
+        2,
+        "essai 7.1 rejeté puis reprise 7.0"
+    );
+
+    // Un 400 SANS signature de version ne doit PAS déclencher de reprise.
+    let server2 = MockServer::start();
+    server2.add_seq(
+        "GET",
+        "/proj/_apis/build/builds",
+        &[(400, &[], r#"{"message":"bad request"}"#)],
+    );
+    let acct2 = account(&server2.base_url(), CiKind::AzureDevopsServer);
+    let client2 = mc_core::ci::CiClient::from_account(&acct2, "pat-x".into()).unwrap();
+    assert!(client2.validate().await.is_err());
+    assert_eq!(
+        server2.hits("GET", "/proj/_apis/build/builds"),
+        1,
+        "aucune reprise sur un 400 générique"
+    );
+}

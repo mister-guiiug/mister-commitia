@@ -8,7 +8,13 @@ use crate::task::TaskCtx;
 use super::platform_error;
 
 /// Client Azure DevOps (cloud : https://dev.azure.com/{org} ; Server :
-/// https://serveur/{collection}). API Builds, api-version 7.1.
+/// https://serveur/{collection}). API Builds.
+///
+/// L'api-version est NÉGOCIÉE (F12) : on tente 7.1 (cloud et Server récents) et
+/// on se rabat une fois sur 7.0 si le serveur la déclare hors plage — cas d'un
+/// Azure DevOps Server on-prem plus ancien. Le choix est mémorisé pour les
+/// appels suivants du même client.
+///
 /// La suppression d'un run passe par Builds–Delete (l'API Pipelines Runs n'a
 /// pas d'opération DELETE, cf. docs/08-apis-plateformes.md).
 pub struct AzDoCi {
@@ -17,6 +23,8 @@ pub struct AzDoCi {
     token: String,
     account_id: String,
     client: reqwest::Client,
+    /// api-version effective, négociée à la volée (7.1 → 7.0).
+    api_version: std::sync::Mutex<String>,
 }
 
 impl AzDoCi {
@@ -33,6 +41,7 @@ impl AzDoCi {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
+            api_version: std::sync::Mutex::new("7.1".to_string()),
         })
     }
 
@@ -51,15 +60,66 @@ impl AzDoCi {
             .header("Accept", "application/json")
     }
 
-    pub async fn validate(&self) -> Result<String> {
-        let url = format!(
-            "{}/{}/_apis/build/builds?$top=1&api-version=7.1",
-            self.base, self.project
-        );
-        let resp = self.req(reqwest::Method::GET, url).send().await?;
+    fn ver(&self) -> String {
+        self.api_version.lock().unwrap().clone()
+    }
+
+    fn downgrade(&self) {
+        *self.api_version.lock().unwrap() = "7.0".to_string();
+    }
+
+    /// Détecte une erreur « api-version hors plage » d'Azure DevOps Server : un
+    /// HTTP 400 dont le message cite une version non supportée. C'est un rejet
+    /// franc (rien n'a été exécuté côté serveur) — rejouer la requête, même un
+    /// DELETE, avec une version inférieure est donc sûr (aucune double action).
+    fn is_version_error(status: reqwest::StatusCode, body: &str) -> bool {
+        if status.as_u16() != 400 {
+            return false;
+        }
+        let b = body.to_lowercase();
+        b.contains("version") && (b.contains("range") || b.contains("supported"))
+    }
+
+    /// Envoie une requête en négociant l'api-version. `suffix` est la partie
+    /// d'URL après `{base}/{project}` et contient le jeton `{VER}` à la place de
+    /// la valeur d'api-version. Sur erreur de version, se rabat une fois sur 7.0
+    /// et mémorise le choix.
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        suffix: &str,
+    ) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
+        let url = |ver: &str| {
+            format!(
+                "{}/{}{}",
+                self.base,
+                self.project,
+                suffix.replace("{VER}", ver)
+            )
+        };
+        let ver = self.ver();
+        let resp = self.req(method.clone(), url(&ver)).send().await?;
         let status = resp.status();
         let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
+        if ver != "7.0" && Self::is_version_error(status, &body) {
+            self.downgrade();
+            let resp = self.req(method, url("7.0")).send().await?;
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            let body = resp.text().await.unwrap_or_default();
+            return Ok((status, headers, body));
+        }
+        Ok((status, headers, body))
+    }
+
+    pub async fn validate(&self) -> Result<String> {
+        let (status, headers, body) = self
+            .send(
+                reqwest::Method::GET,
+                "/_apis/build/builds?$top=1&api-version={VER}",
+            )
+            .await?;
         if !status.is_success() {
             return Err(platform_error(
                 status,
@@ -79,17 +139,13 @@ impl AzDoCi {
         let mut continuation: Option<String> = None;
         loop {
             ctx.step("inventaire des builds", out.len() as u64, Some(max as u64))?;
-            let mut url = format!(
-                "{}/{}/_apis/build/builds?$top=100&queryOrder=queueTimeDescending&api-version=7.1",
-                self.base, self.project
-            );
+            let mut suffix =
+                "/_apis/build/builds?$top=100&queryOrder=queueTimeDescending&api-version={VER}"
+                    .to_string();
             if let Some(c) = &continuation {
-                url.push_str(&format!("&continuationToken={c}"));
+                suffix.push_str(&format!("&continuationToken={c}"));
             }
-            let resp = self.req(reqwest::Method::GET, url).send().await?;
-            let status = resp.status();
-            let headers = resp.headers().clone();
-            let body = resp.text().await.unwrap_or_default();
+            let (status, headers, body) = self.send(reqwest::Method::GET, &suffix).await?;
             if !status.is_success() {
                 return Err(platform_error(
                     status,
@@ -153,14 +209,8 @@ impl AzDoCi {
 
     /// Leases actives d'un run — revérifiées juste avant suppression (CA-12).
     pub async fn run_leases(&self, run_id: &str) -> Result<usize> {
-        let url = format!(
-            "{}/{}/_apis/build/builds/{}/leases?api-version=7.1",
-            self.base, self.project, run_id
-        );
-        let resp = self.req(reqwest::Method::GET, url).send().await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        let body = resp.text().await.unwrap_or_default();
+        let suffix = format!("/_apis/build/builds/{run_id}/leases?api-version={{VER}}");
+        let (status, headers, body) = self.send(reqwest::Method::GET, &suffix).await?;
         if !status.is_success() {
             return Err(platform_error(
                 status,
@@ -181,14 +231,8 @@ impl AzDoCi {
                 run.run_id, leases
             )));
         }
-        let url = format!(
-            "{}/{}/_apis/build/builds/{}?api-version=7.1",
-            self.base, self.project, run.run_id
-        );
-        let resp = self.req(reqwest::Method::DELETE, url).send().await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-        let body = resp.text().await.unwrap_or_default();
+        let suffix = format!("/_apis/build/builds/{}?api-version={{VER}}", run.run_id);
+        let (status, headers, body) = self.send(reqwest::Method::DELETE, &suffix).await?;
         if !status.is_success() {
             return Err(platform_error(
                 status,
