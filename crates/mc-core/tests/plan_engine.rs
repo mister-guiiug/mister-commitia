@@ -4,6 +4,7 @@ use common::*;
 use git2::Repository;
 use mc_core::model::*;
 use mc_core::task::{CancelToken, TaskCtx, TaskEvent};
+use proptest::prelude::*;
 
 /// Réécrit (reword) puis applique un plan sur `feature/checkout`, la faisant
 /// diverger de son remote-tracking. Retourne le nouveau sommet local.
@@ -386,55 +387,7 @@ fn t10_merge_structure_guardrails() {
 /// parents est PRÉSERVÉ et l'arbre final est identique (squash sans perte).
 #[test]
 fn t10_structure_change_across_merge_supported() {
-    let f = init_repo();
-    commit(
-        &f.repo,
-        &[("README.md", "# app\n")],
-        "chore: init",
-        1_700_000_000,
-    );
-    checkout_new_branch(&f.repo, "feature/merge");
-    let _c = commit(
-        &f.repo,
-        &[("src/c.rs", "// c\n")],
-        "feat: base",
-        1_700_000_100,
-    );
-    // Branche side depuis C → E.
-    {
-        let cc = f.repo.find_commit(_c).unwrap();
-        f.repo.branch("side", &cc, false).unwrap();
-    }
-    checkout_existing(&f.repo, "side");
-    let _e = commit(
-        &f.repo,
-        &[("src/e.rs", "// e\n")],
-        "feat: side work",
-        1_700_000_200,
-    );
-    // Retour mainline → deux commits CONTIGUS d1, d2.
-    checkout_existing(&f.repo, "feature/merge");
-    let d1 = commit(
-        &f.repo,
-        &[("src/d.rs", "// d1\n")],
-        "wip: d part 1",
-        1_700_000_300,
-    );
-    let d2 = commit(
-        &f.repo,
-        &[("src/d.rs", "// d1\n// d2\n")],
-        "wip: d part 2",
-        1_700_000_400,
-    );
-    let e_tip = f.repo.refname_to_id("refs/heads/side").unwrap();
-    let m = merge_commit(
-        &f.repo,
-        &[d2, e_tip],
-        &[("src/d.rs", "// d1\n// d2\n"), ("src/e.rs", "// e\n")],
-        "merge: integrate side work",
-        1_700_000_500,
-    );
-
+    let (f, (d1, d2, m)) = merge_mainline_fixture();
     let (core, repo_id) = core_with(&f);
     let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
     let plan = core
@@ -486,6 +439,65 @@ fn t10_structure_change_across_merge_supported() {
         .unwrap()
         .to_string();
     assert!(msg.contains("d combined"), "{msg}");
+
+    // A4 : la carte avant/après couvre TOUS les commits survivants du segment,
+    // y compris le commit de MERGE (mapping complet, pas best-effort).
+    assert_eq!(
+        plan.mapping.len(),
+        4,
+        "C, E, d(fusionné), M : {:?}",
+        plan.mapping
+    );
+    let m_entry = plan
+        .mapping
+        .iter()
+        .find(|mm| mm.old.contains(&m.to_string()))
+        .expect("le commit de merge doit figurer dans la carte");
+    assert_eq!(
+        f.repo
+            .find_commit(git2::Oid::from_str(&m_entry.new).unwrap())
+            .unwrap()
+            .parent_count(),
+        2,
+        "l'entrée du merge pointe bien vers un merge"
+    );
+}
+
+/// A3 (T10) : l'APPLICATION d'un plan de structure à travers un merge bascule
+/// la branche sur le résultat (merge préservé), avec backup. Le dry-run est
+/// déjà couvert ; ce test verrouille le chemin `apply` de bout en bout.
+#[test]
+fn t10_apply_structure_change_across_merge() {
+    let (f, (d1, d2, m)) = merge_mainline_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Squash {
+                    targets: vec![d1.to_string(), d2.to_string()],
+                    new_message: "feat: d combined".into(),
+                },
+            )],
+        )
+        .unwrap();
+    core.plan_dry_run(&plan.id).unwrap();
+    // feature/merge n'est pas protégée et n'est pas partagée → apply direct.
+    let applied = core.plan_apply(&plan.id, None).unwrap();
+    assert_eq!(applied.status, PlanStatus::Applied);
+    assert!(applied.backup_ref.is_some(), "backup créé avant bascule");
+
+    // La branche pointe désormais sur un merge à 2 parents, arbre identique.
+    let tip = f.repo.refname_to_id("refs/heads/feature/merge").unwrap();
+    let tipc = f.repo.find_commit(tip).unwrap();
+    assert_eq!(tipc.parent_count(), 2, "merge préservé après apply");
+    assert_eq!(
+        tipc.tree_id(),
+        f.repo.find_commit(m).unwrap().tree_id(),
+        "arbre final identique"
+    );
 }
 
 /// CA-3 : pas d'application sans dry-run du même plan.
@@ -899,4 +911,78 @@ fn risk_report_flags_shared_and_drops() {
     assert_eq!(get("partage").verdict, "attention");
     assert_eq!(get("pertes").verdict, "attention");
     assert_eq!(get("branche").verdict, "ok");
+}
+
+proptest! {
+    // A1 : proptest sur les OPÉRATIONS GIT RÉELLES (au-delà du compilateur pur).
+    // Sur un dépôt linéaire synthétique, un plan aléatoire (reword/drop/reorder)
+    // passé au dry-run ne doit JAMAIS paniquer : il réussit (et alors les
+    // invariants tiennent) ou renvoie une erreur GÉRÉE (ex. conflit de rejeu).
+    // Le dry-run reste sans effet de bord (la branche ne bouge pas).
+    #![proptest_config(ProptestConfig::with_cases(20))]
+    #[test]
+    fn engine_dry_run_never_panics_and_preserves_invariants(
+        reword_mask in 0u8..16,
+        drop_idx in prop::option::of(0usize..4),
+        do_reorder in any::<bool>(),
+    ) {
+        let (f, shas) = feature_fixture();
+        let (core, repo_id) = core_with(&f);
+        let tip_before = f.repo.refname_to_id("refs/heads/feature/checkout").unwrap();
+
+        let mut ops = Vec::new();
+        let mut seq = 1u32;
+        for (i, sha) in shas.iter().enumerate() {
+            if reword_mask & (1 << i) != 0 {
+                ops.push(op(seq, Operation::Reword {
+                    target: sha.to_string(),
+                    new_message: format!("chore: reworded {i}"),
+                }));
+                seq += 1;
+            }
+        }
+        if let Some(d) = drop_idx {
+            ops.push(op(seq, Operation::Drop {
+                target: shas[d].to_string(),
+                reason: "prop".into(),
+            }));
+            seq += 1;
+        }
+        if do_reorder {
+            let order: Vec<String> = (0..4usize)
+                .rev()
+                .filter(|i| Some(*i) != drop_idx)
+                .map(|i| shas[i].to_string())
+                .collect();
+            if order.len() >= 2 {
+                ops.push(op(seq, Operation::Reorder { order }));
+            }
+        }
+        if ops.is_empty() {
+            return Ok(());
+        }
+
+        let plan = core.plan_new(&repo_id, "feature/checkout").unwrap();
+        let plan = core.plan_set_ops(&plan.id, ops).unwrap();
+        match core.plan_dry_run(&plan.id) {
+            Ok(p) => {
+                prop_assert_eq!(p.status, PlanStatus::DryRunOk);
+                let preview = f.repo.refname_to_id(p.preview_ref.as_ref().unwrap()).unwrap();
+                let newc = f.repo.find_commit(preview).unwrap();
+                // Sans drop, l'arbre final est identique au sommet d'origine.
+                if drop_idx.is_none() {
+                    prop_assert_eq!(
+                        newc.tree_id(),
+                        f.repo.find_commit(tip_before).unwrap().tree_id()
+                    );
+                }
+                // Le dry-run n'a AUCUN effet de bord : la branche ne bouge pas.
+                prop_assert_eq!(
+                    f.repo.refname_to_id("refs/heads/feature/checkout").unwrap(),
+                    tip_before
+                );
+            }
+            Err(_) => { /* erreur gérée (ex. conflit de rejeu) : acceptable */ }
+        }
+    }
 }
