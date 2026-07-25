@@ -90,6 +90,23 @@ jobs:
               print(f"::error::couverture plan.rs {pct:.1f}% < 80% (DoD §9.2)"); sys.exit(1)
           PY
 
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Installer cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+      - name: Générer le SBOM (mc-core)
+        run: cargo cyclonedx --locked -p mc-core --format json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: "**/*.cdx.json"
+          if-no-files-found: error
+
   front:
     name: Build front (type-check + vite)
     runs-on: ubuntu-latest

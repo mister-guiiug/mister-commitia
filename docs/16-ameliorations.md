@@ -12,7 +12,7 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | F4 | ✅ **Push assisté post-application** : `--force-with-lease` guidé, checklist de coordination, détection des PR ouvertes via l'API | M | **Livré (lot 4)** : `push_preview`/`push_execute` (bail explicite, garde-fous protégée+confirmation typée, audit avant/après), PR ouvertes via GitHub, panneau UI avec checklist |
 | F5 | ✅ **Import de plan dans l'UI** | S | **Livré (lot 1)** : bouton d'import câblé sur `plan_import` |
 | F6 | **Choix de la base du segment** (autre branche/сommit que le merge-base auto) | S | Utile pour branches empilées |
-| F7 | **Nettoyage CI en masse** : exécution par lot du rapport de simulation avec throttling adaptatif, reprise sur checkpoint, puis logs/artifacts GitHub | L | Backlog V2-CI-1/4 ; le cœur gère déjà 429/Retry-After à l'unité |
+| F7 | ✅ **Nettoyage CI en masse** : exécution par lot du rapport de simulation avec throttling, reprise sur checkpoint | L | **Livré (lot 7)** : `ci_delete_batch` (mêmes garde-fous qu'à l'unité, 429/Retry-After → attente annulable, checkpoint des `run_id` pour reprise, progression, audit par run) + UI (bouton « Tout supprimer (N) »/« Reprendre », confirmation par le nombre). Suppression des logs/artifacts : extension future |
 | F8 | ✅ **Éditeur de skills intégré** : édition YAML, validation à l'enregistrement, self-tests | M | **Livré (lot 2)** : édition du manifeste (`name` immuable, anti-traversée), éditions journalisées |
 | F9 | ✅ **Rapport HTML exportable** d'un plan (avant/après, risques, mapping) pour revue d'équipe hors outil | S | **Livré (lot 2)** : export HTML autonome depuis le plan |
 | F10 | ✅ **Onboarding premier lancement** : déclarer un dépôt, choisir IA locale/distante, expliquer les garde-fous | S | **Livré (lot 2)** : accueil 3 étapes (localStorage) |
@@ -30,8 +30,8 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | T5 | ✅ **CI qualité** : clippy + rustfmt (`--check`), `cargo-deny` (advisories), couverture `cargo-llvm-cov` avec gate ≥ 80 % sur plan-engine (DoD §9.2) | S | **Livré** (lots 1 & 6) : fmt/clippy/advisories + **job `couverture`** gate plan.rs ≥ 80 % (mesuré : **87,7 %** ; global mc-core 80,5 %) |
 | T6 | ✅ **Tests de propriétés** (proptest) sur `compile()` du plan : séquences d'opérations aléatoires → invariants (§15.4) | M | **Livré (lot 5)** : 400 cas — jamais de panic, invariants leaders/commits/reword-only |
 | T7 | ✅ **E2E desktop** via tauri-driver/WebDriver sur le runner Windows | L | **Livré (lot 5)** : E2E Playwright (web/mock, job CI à chaque push) + harnais natif tauri-driver (`e2e-native/`, job `workflow_dispatch` expérimental) |
-| T8 | **Signature des binaires** (Azure Trusted Signing ou certificat OV) + `tauri-plugin-updater` signé | M | Bundles actuellement non signés → SmartScreen ; prérequis à une distribution large |
-| T9 | Durcir la **CSP** (supprimer `unsafe-inline` styles) et ajouter un audit `cargo auditable`/SBOM | S | Aligné avec la pratique mister-doc (CSP hash) |
+| T8 | ✅ **Signature des binaires** (Azure Trusted Signing ou certificat OV) | M | **Livré partiel (lot 7)** : étape de signature Authenticode dans `release.yml` conditionnée à un secret certificat (signe MSI/NSIS/exe + horodatage), sinon avertissement « non signé ». Non vérifiable sans certificat ; `tauri-plugin-updater` signé : reporté (keypair) |
+| T9 | ✅ Durcir la **CSP** + SBOM | S | **Livré (lot 7)** : CSP durcie (`object-src 'none'`, `base-uri 'self'`, `frame-src/frame-ancestors 'none'`, `script-src 'self'`) — `style-src 'unsafe-inline'` conservé (styles React inline) ; **SBOM CycloneDX** généré en CI (artefact) |
 | T10 | ✅ **Merges dans le segment** (partiel) : rapport de conflits par fichier | L | **Livré partiel (lot 5)** : `reword_dag` réécrit les MESSAGES à travers un merge (topologie/arbres préservés) ; le sequencer liste les fichiers en conflit. Changements de structure à travers un merge : toujours refusés (sûreté). `--rebase-merges` complet : reporté |
 | T11 | ✅ **Streaming des réponses IA** + retry/backoff + budget de tokens par lot | M | **Livré (lot 3)** : SSE/NDJSON relayés en direct, backoff plafonné `Retry-After`, budget 256..1024/groupe |
 | T12 | ✅ Script `scripts/dev-env.ps1` qui configure la toolchain windows-gnu locale (PATH/CC/AR, recette documentée) | S | **Livré (lot 1)** : recette versionnée (BOM UTF-8 + PATH `dlltool-only`) |
@@ -54,13 +54,13 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 | U9 | ✅ **Accessibilité** : aria-labels sur les cases de commits, focus visible, navigation clavier, `prefers-reduced-motion` | M | **Livré (lot 2)** : focus-visible, aria-labels/aria-current, mouvement réduit respecté |
 | U10 | ✅ **États vides actionnables** : chaque `Empty` propose l'action suivante | S | **Livré (lot 1)** : `Empty` avec `actionLabel`/`onAction` |
 | U11 | ✅ **Lexique FR harmonisé** : capitalisation des boutons, espaces insécables avant « : » et « ? » | S | **Livré** (lots 1 & 6) : libellés principaux + passe sur les écrans secondaires ; plus aucune violation d'espace insécable dans le texte visible |
-| U12 | **Raccourcis clavier** (actualiser, dry-run, naviguer entre onglets) + affichage `?` | M | Aucun raccourci |
+| U12 | ✅ **Raccourcis clavier** (naviguer entre onglets) + affichage `?` | M | **Livré (lot 7)** : `1`–`6` changent d'onglet, `?` ouvre l'aide des raccourcis, `Échap` ferme (ignorés dans les champs de saisie) |
 
 ## 16.4 Priorisation proposée
 
 1. **Quick wins immédiats (≈ 1 semaine)** — ✅ **tous livrés** : ~~T1~~, ~~U1~~, ~~U3~~, ~~U4~~, ~~U5~~, ~~U7~~, ~~U8~~, ~~U10~~, ~~U11~~, ~~F5~~, ~~T3~~, ~~T5~~ (couverture incluse), ~~T12~~.
 2. **Structurants (≈ 1 sprint)** — ✅ **tous livrés** : ~~F2 (reorder UI)~~, ~~F3 (diff)~~, ~~T2 (progression/annulation)~~, ~~U6~~, ~~U9~~, ~~F8~~, ~~F9~~, ~~F10~~, ~~T4~~, ~~T11~~.
-3. **Ambitieux / V2** : ~~F1 (graphe)~~ ✅, ~~F4 (push assisté)~~ ✅, ~~T6~~ ✅, ~~T7 (E2E)~~ ✅, ~~T10 (merges, partiel)~~ ✅, ~~T13~~ ✅, ~~U2~~ ✅, ~~F11 (partiel)~~ ✅ · **restant** : F7 (masse CI), T8 (signature), T9 (CSP/SBOM), T10 complet (`--rebase-merges`), U12 (raccourcis), F11 (corps de page).
+3. **Ambitieux / V2** — ✅ **livrés** : ~~F1 (graphe)~~, ~~F4 (push assisté)~~, ~~T6~~, ~~T7 (E2E)~~, ~~T10 (merges, partiel)~~, ~~T13~~, ~~U2~~, ~~F11 (partiel)~~, ~~F7 (masse CI)~~, ~~T8 (signature, scaffold)~~, ~~T9 (CSP/SBOM)~~, ~~U12 (raccourcis)~~ · **restant** : F6 (base du segment), F12 (api-version AzDO), T10 complet (`--rebase-merges`), `tauri-plugin-updater` signé, F11 (corps de page).
 
 Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les primitives (U1/U3/U4/U5), ensuite enrichir les parcours (reorder, diff, push), enfin ouvrir les chantiers V2 déjà cadrés au [backlog](10-backlog-v2.md).
 
@@ -155,3 +155,18 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > **Les tiers 1 (quick wins) et 2 (structurants) de la priorisation §16.4 sont désormais
 > intégralement livrés.** Vérifié : CI entièrement verte (dont le job couverture) ; tri du
 > Journal rejoué en navigateur.
+
+> **Lot 7 livré le 2026-07-25** (tier 3 « ambitieux » restant) : F7 — **nettoyage CI en masse**
+> `ci_delete_batch` : supprime le lot des candidats d'une simulation, résiste au throttling
+> (429/Retry-After → attente **annulable**), garde un **point de reprise** (`run_id` déjà
+> supprimés) pour relancer sans doublon, émet la progression et journalise chaque run ; UI
+> (bouton « Tout supprimer (N) » / « Reprendre », confirmation par le **nombre** de runs).
+> U12 — **raccourcis clavier** (`1`–`6` = onglets, `?` = aide, `Échap` = fermer ; ignorés dans
+> les champs). T9 — **CSP durcie** (object/frame/base-uri) + **SBOM CycloneDX** en CI ;
+> `style-src 'unsafe-inline'` conservé (styles React inline). T8 — **signature Authenticode**
+> scaffoldée dans `release.yml`, conditionnée à un secret certificat (sinon non signé).
+> Vérifié : **58 tests cœur verts** (dont F7 : throttling 429→reprise, confirmation par le
+> nombre, checkpoint sans re-suppression) ; parcours navigateur (raccourcis 1–6 + `?` + Échap ;
+> suppression en masse : bouton, confirmation, exécution retirant les candidats).
+> **Reste au backlog V2** : F6, F12, T10 complet (`--rebase-merges`), updater signé,
+> F11 (corps de page), suppression des logs/artifacts CI.
