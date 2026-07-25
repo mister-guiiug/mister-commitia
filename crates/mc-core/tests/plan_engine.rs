@@ -287,6 +287,81 @@ async fn f4_force_push_refused_on_protected_branch() {
     assert!(err.to_string().contains("protégée"), "{err}");
 }
 
+/// T10 : un reword à travers un segment contenant un MERGE réussit — la
+/// topologie (le merge à 2 parents) et l'arbre final sont préservés à
+/// l'identique, seul le message change.
+#[test]
+fn t10_reword_across_merge_preserves_topology() {
+    let (f, (c, _d, _e, m)) = merge_fixture();
+    let (core, repo_id) = core_with(&f);
+
+    let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Reword {
+                    target: c.to_string(),
+                    new_message: "feat: base feature (reformule)".into(),
+                },
+            )],
+        )
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(plan.status, PlanStatus::DryRunOk, "reword-merge accepté");
+
+    let preview = f
+        .repo
+        .refname_to_id(plan.preview_ref.as_ref().unwrap())
+        .unwrap();
+    let new_tip = f.repo.find_commit(preview).unwrap();
+    assert_eq!(new_tip.parent_count(), 2, "le merge est préservé");
+    assert_eq!(
+        new_tip.tree_id(),
+        f.repo.find_commit(m).unwrap().tree_id(),
+        "arbre final identique (reword pur)"
+    );
+
+    // Le message de C est réécrit dans la préview.
+    let cnew = plan
+        .mapping
+        .iter()
+        .find(|mm| mm.old[0] == c.to_string())
+        .unwrap();
+    let msg = f
+        .repo
+        .find_commit(git2::Oid::from_str(&cnew.new).unwrap())
+        .unwrap()
+        .message()
+        .unwrap()
+        .to_string();
+    assert!(msg.contains("reformule"), "{msg}");
+}
+
+/// T10 : un changement de STRUCTURE à travers un merge reste refusé (garde-fou).
+#[test]
+fn t10_structure_change_across_merge_refused() {
+    let (f, (c, _d, _e, _m)) = merge_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/merge").unwrap();
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Drop {
+                    target: c.to_string(),
+                    reason: "x".into(),
+                },
+            )],
+        )
+        .unwrap();
+    let err = core.plan_dry_run(&plan.id).unwrap_err().to_string();
+    assert!(err.contains("merge"), "{err}");
+    assert!(err.contains("structure"), "{err}");
+}
+
 /// CA-3 : pas d'application sans dry-run du même plan.
 #[test]
 fn ca3_apply_requires_fresh_dry_run() {

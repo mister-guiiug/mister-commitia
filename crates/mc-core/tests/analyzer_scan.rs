@@ -192,6 +192,50 @@ fn f1_graph_merge_uses_multiple_lanes() {
     }
 }
 
+/// T13 : le cache d'analyse par SHA est réutilisé entre scans (pas de
+/// recomputation) ; `on_remote`, dépendant du contexte, est recalculé hors cache.
+#[test]
+fn t13_analysis_cache_reused_and_on_remote_recomputed() {
+    let (f, _shas) = feature_fixture();
+    let (core, repo_id) = core_with(&f);
+
+    let s1 = core
+        .repo_scan(&repo_id, Some("feature/checkout".into()))
+        .unwrap();
+    assert!(
+        s1.commits.iter().all(|c| !c.on_remote),
+        "rien sur le remote"
+    );
+    assert_eq!(core.analysis_cache_len(), 4);
+
+    // Deuxième scan : cache stable (aucune nouvelle entrée), résultats identiques.
+    let s2 = core
+        .repo_scan(&repo_id, Some("feature/checkout".into()))
+        .unwrap();
+    assert_eq!(
+        core.analysis_cache_len(),
+        4,
+        "cache réutilisé, pas de croissance"
+    );
+    assert_eq!(s1.commits[0].sha, s2.commits[0].sha);
+    assert_eq!(s1.commits[1].files, s2.commits[1].files);
+
+    // Après push, on_remote doit repasser à true alors que le cache sert encore.
+    let _bare = add_remote_and_push(&f, "feature/checkout");
+    let s3 = core
+        .repo_scan(&repo_id, Some("feature/checkout".into()))
+        .unwrap();
+    assert!(
+        s3.commits.iter().all(|c| c.on_remote),
+        "on_remote recalculé hors cache après push"
+    );
+    assert_eq!(
+        core.analysis_cache_len(),
+        4,
+        "toujours pas de recomputation"
+    );
+}
+
 #[test]
 fn commit_infos_carry_files_signatures_and_trailers() {
     let (f, shas) = feature_fixture();

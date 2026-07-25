@@ -1,7 +1,9 @@
 //! Orchestrateur : l'API de haut niveau consommée par l'UI desktop (et par un
 //! futur CLI). Chaque garde-fou vit ICI ou plus bas — jamais dans l'UI.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -22,6 +24,10 @@ pub struct Core {
     pub store: Store,
     pub skills_dir: PathBuf,
     pub actor: String,
+    /// Cache d'analyse par SHA (T13) : parties SHA-invariantes d'un `CommitInfo`
+    /// (diff, fichiers, trailers…). Le champ `on_remote`, dépendant du contexte,
+    /// est TOUJOURS recalculé à chaque scan et n'est jamais servi depuis le cache.
+    analysis_cache: Mutex<HashMap<String, CommitInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +104,7 @@ impl Core {
             actor: std::env::var("USERNAME")
                 .or_else(|_| std::env::var("USER"))
                 .unwrap_or_else(|_| "local".into()),
+            analysis_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -106,7 +113,39 @@ impl Core {
             store: Store::open_in_memory()?,
             skills_dir,
             actor: "test".into(),
+            analysis_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Nombre d'entrées du cache d'analyse (T13) — utilitaire de test/diagnostic.
+    pub fn analysis_cache_len(&self) -> usize {
+        self.analysis_cache.lock().unwrap().len()
+    }
+
+    /// Lit un `CommitInfo` via le cache par SHA (parties SHA-invariantes), puis
+    /// recalcule `on_remote` depuis le contexte courant (jamais mis en cache).
+    fn commit_info_cached(
+        &self,
+        repo: &git2::Repository,
+        oid: git2::Oid,
+        remote_set: &HashSet<git2::Oid>,
+    ) -> Result<CommitInfo> {
+        let key = oid.to_string();
+        let cached = self.analysis_cache.lock().unwrap().get(&key).cloned();
+        let mut info = match cached {
+            Some(ci) => ci,
+            None => {
+                // Calcul SHA-invariant : remote_set vide → on_remote = false.
+                let fresh = GitEngine::commit_info(repo, oid, &HashSet::new())?;
+                self.analysis_cache
+                    .lock()
+                    .unwrap()
+                    .insert(key, fresh.clone());
+                fresh
+            }
+        };
+        info.on_remote = remote_set.contains(&oid);
+        Ok(info)
     }
 
     fn audit(
@@ -238,9 +277,18 @@ impl Core {
             }
             _ => None,
         };
-        let commits = GitEngine::segment_infos_cb(&repo, base, tip, 500, |i, n| {
-            ctx.step("lecture des commits", i as u64, Some(n as u64))
-        })?;
+        // Lecture des commits avec cache par SHA (T13) + progression/annulation.
+        let mut oids = GitEngine::segment(&repo, base, tip)?;
+        if oids.len() > 500 {
+            oids = oids.split_off(oids.len() - 500);
+        }
+        let remote_set = GitEngine::remote_reachable(&repo, base);
+        let total = oids.len() as u64;
+        let mut commits = Vec::with_capacity(oids.len());
+        for (i, o) in oids.iter().enumerate() {
+            ctx.step("lecture des commits", i as u64 + 1, Some(total))?;
+            commits.push(self.commit_info_cached(&repo, *o, &remote_set)?);
+        }
         ctx.step("analyse des messages", 0, None)?;
         let report = analyzer::analyze_commits(
             &r,

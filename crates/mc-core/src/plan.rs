@@ -334,19 +334,36 @@ impl PlanEngine {
         ctx.step("vérification de l'empreinte", 0, None)?;
         let (base, tip) = Self::check_fingerprint(repo, plan)?;
         let segment = GitEngine::segment(repo, Some(base), tip)?;
-        for oid in &segment {
-            if repo.find_commit(*oid)?.parent_count() > 1 {
-                return Err(CoreError::Refused(
-                    "le segment contient un merge : non supporté par le MVP".into(),
-                ));
-            }
+        // T10 : un segment contenant un merge est réécrivable UNIQUEMENT pour de
+        // la reformulation de messages (topologie et arbres préservés, aucun
+        // conflit possible). Les changements de structure restent refusés.
+        let has_merge = segment
+            .iter()
+            .map(|o| repo.find_commit(*o).map(|c| c.parent_count() > 1))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .any(|m| m);
+        let only_reword = plan
+            .ops
+            .iter()
+            .all(|o| matches!(o.op, Operation::Reword { .. }));
+        if has_merge && !only_reword {
+            return Err(CoreError::Refused(
+                "le segment contient un merge : seule la reformulation de messages (reword) est \
+                 supportée à travers un merge ; les changements de structure (squash, fixup, drop, \
+                 réordonnancement) ne le sont pas"
+                    .into(),
+            ));
         }
         ctx.step("compilation du plan", 0, None)?;
         let compiled = compile(&segment, &plan.ops)?;
 
         let (final_tip, mapping) = if !compiled.structure_changed {
-            let (new_tip, map) =
-                rewrite::reword_chain(repo, Some(base), tip, &compiled.messages, ctx)?;
+            let (new_tip, map) = if has_merge {
+                rewrite::reword_dag(repo, base, tip, &compiled.messages, ctx)?
+            } else {
+                rewrite::reword_chain(repo, Some(base), tip, &compiled.messages, ctx)?
+            };
             // Invariant CA-4 : un reword ne change jamais les arbres.
             for (old, new) in &map {
                 let t_old = repo.find_commit(*old)?.tree_id();
@@ -629,5 +646,97 @@ impl PlanEngine {
             motif: "backup branche + tag créés avant application ; rollback en un clic tant que la branche n'avance pas".into(),
         });
         axes
+    }
+}
+
+/// T6 : propriétés de `compile()` sur des séquences d'opérations aléatoires.
+/// Complète les tests exemple-par-exemple : quelle que soit l'entrée, `compile`
+/// ne PANIQUE jamais et, en cas de succès, respecte les invariants structurels.
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn oid(i: usize) -> Oid {
+        Oid::from_str(&format!("{:040x}", i + 1)).unwrap()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(400))]
+        #[test]
+        fn compile_never_panics_and_preserves_commits(
+            n in 1usize..=8,
+            descriptors in prop::collection::vec(
+                (0u8..5, any::<usize>(), any::<usize>(), any::<usize>()),
+                0..7,
+            ),
+        ) {
+            let segment: Vec<Oid> = (0..n).map(oid).collect();
+            let seg_set: std::collections::HashSet<Oid> = segment.iter().copied().collect();
+
+            let mut ops = Vec::new();
+            for (k, (kind, a, b, c)) in descriptors.iter().enumerate() {
+                let (ai, bi, ci) = (a % n, b % n, c % n);
+                let operation = match kind % 5 {
+                    0 => Operation::Reword {
+                        target: segment[ai].to_string(),
+                        new_message: "msg".into(),
+                    },
+                    1 => Operation::Squash {
+                        targets: vec![segment[ai].to_string(), segment[bi].to_string()],
+                        new_message: "sq".into(),
+                    },
+                    2 => Operation::Fixup {
+                        targets: vec![segment[ai].to_string(), segment[bi].to_string()],
+                    },
+                    3 => Operation::Drop {
+                        target: segment[ai].to_string(),
+                        reason: "d".into(),
+                    },
+                    _ => {
+                        // Rotation du segment complet = permutation valide.
+                        let order: Vec<String> = segment
+                            .iter()
+                            .cycle()
+                            .skip(ci)
+                            .take(n)
+                            .map(|o| o.to_string())
+                            .collect();
+                        Operation::Reorder { order }
+                    }
+                };
+                ops.push(PlanOp {
+                    seq: k as u32,
+                    op: operation,
+                    origin: String::new(),
+                    risk: Risk::Low,
+                    approved_by: None,
+                    approved_at: None,
+                });
+            }
+
+            // Ne doit jamais paniquer ; peut échouer (Err) sur une combinaison invalide.
+            if let Ok(compiled) = compile(&segment, &ops) {
+                prop_assert!(!compiled.groups.is_empty());
+                // Chaque commit du segment apparaît AU PLUS une fois (leader ou fixup),
+                // et jamais hors du segment : ni perte silencieuse ni duplication.
+                let mut seen = std::collections::HashSet::new();
+                for g in &compiled.groups {
+                    prop_assert!(seg_set.contains(&g.leader));
+                    prop_assert!(seen.insert(g.leader), "leader vu deux fois");
+                    for f in &g.fixups {
+                        prop_assert!(seg_set.contains(f));
+                        prop_assert!(seen.insert(*f), "commit dans deux groupes");
+                    }
+                }
+                // Reword-only ⇒ aucune modification de structure, mêmes leaders dans l'ordre.
+                let only_reword = ops.iter().all(|o| matches!(o.op, Operation::Reword { .. }));
+                if only_reword {
+                    prop_assert!(!compiled.structure_changed);
+                    let leaders: Vec<Oid> = compiled.groups.iter().map(|g| g.leader).collect();
+                    prop_assert_eq!(leaders, segment.clone());
+                }
+            }
+        }
     }
 }

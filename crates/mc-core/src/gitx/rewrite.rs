@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use git2::{Oid, Repository};
+use git2::{Commit, Oid, Repository};
 
 use crate::error::{CoreError, Result};
 use crate::task::{CancelToken, TaskCtx};
@@ -70,6 +70,64 @@ fn normalize_message(m: &str) -> String {
     let mut s = m.replace("\r\n", "\n").trim_end().to_string();
     s.push('\n');
     s
+}
+
+/// Réécrit UNIQUEMENT les messages d'un segment `base..tip` pouvant contenir des
+/// MERGES (T10). Généralise `reword_chain` à un DAG : chaque commit est recréé
+/// avec ses parents remappés (ceux hors segment gardent leur SHA) et son arbre
+/// INCHANGÉ — la topologie (y compris les merges) et le contenu sont donc
+/// préservés à l'identique ; seuls les messages (et donc les SHA) changent, et
+/// les commits inchangés gardent leur SHA par adressage de contenu.
+pub fn reword_dag(
+    repo: &Repository,
+    base: Oid,
+    tip: Oid,
+    messages: &HashMap<Oid, String>,
+    ctx: &TaskCtx,
+) -> Result<(Oid, HashMap<Oid, Oid>)> {
+    // Ordre topologique du plus ancien au plus récent : un parent du segment
+    // est toujours traité avant ses enfants.
+    let segment = GitEngine::segment(repo, Some(base), tip)?;
+    let seg_set: HashSet<Oid> = segment.iter().copied().collect();
+    let total = segment.len() as u64;
+    let mut map: HashMap<Oid, Oid> = HashMap::new();
+    for (i, oid) in segment.iter().enumerate() {
+        ctx.step("réécriture des messages", i as u64 + 1, Some(total))?;
+        let c = repo.find_commit(*oid)?;
+        let parents: Vec<Commit> = c
+            .parent_ids()
+            .map(|pid| {
+                let mapped = if seg_set.contains(&pid) {
+                    *map.get(&pid).unwrap_or(&pid)
+                } else {
+                    pid
+                };
+                repo.find_commit(mapped)
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        let parent_refs: Vec<&Commit> = parents.iter().collect();
+        let owned;
+        let msg: &str = match messages.get(oid) {
+            Some(m) => {
+                owned = normalize_message(m);
+                &owned
+            }
+            None => c.message().unwrap_or(""),
+        };
+        let new_oid = repo.commit(
+            None,
+            &c.author(),
+            &c.committer(),
+            msg,
+            &c.tree()?,
+            &parent_refs,
+        )?;
+        map.insert(*oid, new_oid);
+    }
+    let new_tip = *map
+        .get(&tip)
+        .ok_or_else(|| CoreError::Invalid("segment vide".into()))?;
+    Ok((new_tip, map))
 }
 
 fn posix(p: &Path) -> String {
@@ -226,13 +284,26 @@ pub fn sequencer_rebase(
     );
 
     if let Err(e) = rebase {
+        // Rapport de conflits par fichier (T10) avant d'abandonner.
+        let conflicts =
+            run_git(&wt, &["diff", "--name-only", "--diff-filter=U"], &[]).unwrap_or_default();
         let _ = run_git(&wt, &["rebase", "--abort"], &[]);
         cleanup(&repo_dir, &wt, &scratch);
         return Err(match e {
             CoreError::Cancelled => CoreError::Cancelled,
-            e => CoreError::Refused(format!(
-                "le rejeu de la structure a échoué (conflit probable) : {e}"
-            )),
+            e => {
+                let files = if conflicts.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        " Fichiers en conflit : {}.",
+                        conflicts.lines().collect::<Vec<_>>().join(", ")
+                    )
+                };
+                CoreError::Refused(format!(
+                    "le rejeu de la structure a échoué (conflit probable) : {e}.{files}"
+                ))
+            }
         });
     }
 
