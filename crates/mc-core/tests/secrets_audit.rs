@@ -80,13 +80,13 @@ fn store_migrations_are_versioned_and_idempotent() {
     let db = dir.path().join("t.sqlite");
     {
         let store = mc_core::store::Store::open(&db).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 1);
+        assert_eq!(store.schema_version().unwrap(), 2);
         store
             .setting_set("k", &serde_json::json!({"v": 1}))
             .unwrap();
     }
     let store = mc_core::store::Store::open(&db).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
     assert_eq!(
         store.setting_get("k").unwrap().unwrap()["v"].as_i64(),
         Some(1)
