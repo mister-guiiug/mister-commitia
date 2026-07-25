@@ -121,11 +121,27 @@ export type PlanOp = Operation & {
   approved_at: string | null;
 };
 
-export type PlanStatus = "draft" | "dry_run_ok" | "applied" | "rolled_back" | "invalidated";
+export type PlanStatus =
+  | "draft"
+  | "dry_run_ok"
+  | "applied"
+  | "rolled_back"
+  | "invalidated"
+  | "conflict";
 
 export interface ShaMapping {
   old: string[];
   new: string;
+}
+
+/** Un fichier en conflit pendant un rejeu (C1) : `content` porte les marqueurs. */
+export interface ConflictFile {
+  path: string;
+  content: string;
+}
+
+export interface ConflictInfo {
+  files: ConflictFile[];
 }
 
 export interface Plan {
@@ -144,6 +160,8 @@ export interface Plan {
   dry_run_at: string | null;
   applied_at: string | null;
   error: string | null;
+  /** Détail du conflit quand `status === "conflict"` (C1). */
+  conflict?: ConflictInfo | null;
 }
 
 export type ProposalStatus = "proposed" | "accepted" | "edited" | "rejected" | "refused";

@@ -1086,15 +1086,23 @@ proptest! {
         let plan = core.plan_set_ops(&plan.id, ops).unwrap();
         match core.plan_dry_run(&plan.id) {
             Ok(p) => {
-                prop_assert_eq!(p.status, PlanStatus::DryRunOk);
-                let preview = f.repo.refname_to_id(p.preview_ref.as_ref().unwrap()).unwrap();
-                let newc = f.repo.find_commit(preview).unwrap();
-                // Sans drop, l'arbre final est identique au sommet d'origine.
-                if drop_idx.is_none() {
-                    prop_assert_eq!(
-                        newc.tree_id(),
-                        f.repo.find_commit(tip_before).unwrap().tree_id()
-                    );
+                if p.status == PlanStatus::Conflict {
+                    // Un conflit de rejeu met le plan EN PAUSE (C1) : issue GÉRÉE, au
+                    // même titre qu'une erreur. On abandonne la session (nettoyage du
+                    // worktree) et on ne contrôle que l'absence d'effet de bord.
+                    prop_assert!(p.conflict.is_some());
+                    let _ = core.plan_conflict_abort(&p.id);
+                } else {
+                    prop_assert_eq!(p.status, PlanStatus::DryRunOk);
+                    let preview = f.repo.refname_to_id(p.preview_ref.as_ref().unwrap()).unwrap();
+                    let newc = f.repo.find_commit(preview).unwrap();
+                    // Sans drop, l'arbre final est identique au sommet d'origine.
+                    if drop_idx.is_none() {
+                        prop_assert_eq!(
+                            newc.tree_id(),
+                            f.repo.find_commit(tip_before).unwrap().tree_id()
+                        );
+                    }
                 }
                 // Le dry-run n'a AUCUN effet de bord : la branche ne bouge pas.
                 prop_assert_eq!(
@@ -1102,7 +1110,124 @@ proptest! {
                     tip_before
                 );
             }
-            Err(_) => { /* erreur gérée (ex. conflit de rejeu) : acceptable */ }
+            Err(_) => { /* erreur gérée (ex. conflit non résoluble) : acceptable */ }
         }
     }
+}
+
+/// Deux commits éditant la MÊME ligne : les réordonner provoque un conflit de
+/// rejeu déterministe. Segment base..tip = {c1, c2}. Retourne (c1, c2).
+fn conflict_fixture() -> (Fixture, git2::Oid, git2::Oid) {
+    let f = init_repo();
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n"), ("f.txt", "L1\nL2\nL3\n")],
+        "chore: init",
+        1_700_000_000,
+    );
+    checkout_new_branch(&f.repo, "feature/conflict");
+    let c1 = commit(
+        &f.repo,
+        &[("f.txt", "L1\nX\nL3\n")],
+        "edit middle line to X",
+        1_700_000_100,
+    );
+    let c2 = commit(
+        &f.repo,
+        &[("f.txt", "L1\nY\nL3\n")],
+        "edit middle line to Y",
+        1_700_000_200,
+    );
+    (f, c1, c2)
+}
+
+/// C1 — résolution INTERACTIVE : un réordonnancement conflictuel met le dry-run
+/// EN PAUSE (statut Conflict + fichiers à marqueurs exposés) ; après résolution
+/// puis reprise, la préview est produite (DryRunOk) et reflète la résolution.
+#[test]
+fn c1_interactive_conflict_resolution_pauses_then_resumes() {
+    let (f, c1, c2) = conflict_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/conflict").unwrap();
+    // Inverse l'ordre des deux commits qui touchent la même ligne -> conflit.
+    let order = vec![c2.to_string(), c1.to_string()];
+    let plan = core
+        .plan_set_ops(&plan.id, vec![op(1, Operation::Reorder { order })])
+        .unwrap();
+
+    let mut plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(
+        plan.status,
+        PlanStatus::Conflict,
+        "reordonner deux edits de la meme ligne doit produire un conflit"
+    );
+
+    // Chaque tour résout vers un contenu DISTINCT : deux commits réordonnés qui
+    // toucheraient la même ligne se re-conflictent ; résoudre à l'identique
+    // rendrait le second commit vide (git le supprimerait). Le dernier tour porte
+    // sur le dernier pick (le sommet), donc l'arbre final = dernière résolution.
+    let mut rounds = 0;
+    let mut last_resolution = String::new();
+    while plan.status == PlanStatus::Conflict {
+        rounds += 1;
+        assert!(rounds <= 5, "trop de tours de resolution");
+        let conflict = plan.conflict.clone().expect("detail de conflit present");
+        assert!(
+            conflict.files.iter().any(|cf| cf.path == "f.txt"),
+            "f.txt doit figurer parmi les fichiers en conflit"
+        );
+        assert!(
+            conflict
+                .files
+                .iter()
+                .any(|cf| cf.content.contains("<<<<<<<")),
+            "le contenu expose doit porter les marqueurs de conflit"
+        );
+        last_resolution = format!("L1\nR{rounds}\nL3\n");
+        for cf in &conflict.files {
+            core.plan_conflict_resolve(&plan.id, &cf.path, &last_resolution)
+                .unwrap();
+        }
+        plan = core.plan_conflict_continue(&plan.id).unwrap();
+    }
+    assert!(rounds >= 1, "au moins un tour de resolution attendu");
+    assert_eq!(plan.status, PlanStatus::DryRunOk);
+    assert!(plan.preview_ref.is_some());
+    assert!(plan.conflict.is_none());
+
+    // La préview reflète la résolution manuelle (l'invariant d'arbre est relâché
+    // après résolution : le contenu final est celui décidé par l'humain).
+    let preview = f
+        .repo
+        .refname_to_id(plan.preview_ref.as_ref().unwrap())
+        .unwrap();
+    let tree = f.repo.find_commit(preview).unwrap().tree();
+    let entry = tree
+        .unwrap()
+        .get_path(std::path::Path::new("f.txt"))
+        .unwrap();
+    let obj = entry.to_object(&f.repo).unwrap();
+    let content = String::from_utf8_lossy(obj.as_blob().unwrap().content()).to_string();
+    assert_eq!(content, last_resolution);
+}
+
+/// C1 — l'abandon d'une session de conflit remet le plan en Draft et nettoie la
+/// session (une reprise ultérieure échoue proprement).
+#[test]
+fn c1_interactive_conflict_abort_resets_to_draft() {
+    let (f, c1, c2) = conflict_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/conflict").unwrap();
+    let order = vec![c2.to_string(), c1.to_string()];
+    let plan = core
+        .plan_set_ops(&plan.id, vec![op(1, Operation::Reorder { order })])
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(plan.status, PlanStatus::Conflict);
+
+    let plan = core.plan_conflict_abort(&plan.id).unwrap();
+    assert_eq!(plan.status, PlanStatus::Draft);
+    assert!(plan.conflict.is_none());
+    // Plus de session : reprendre échoue proprement (pas de panique).
+    assert!(core.plan_conflict_continue(&plan.id).is_err());
 }

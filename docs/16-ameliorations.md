@@ -203,3 +203,36 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > opérations sur un commit de merge. **Vérifié localement (dry-run réel sur dépôt à merge)
 > puis en CI : 62 tests cœur verts.** Seul résidu V2 : `tauri-plugin-updater` signé
 > (keypair minisign indisponible sur ce poste).
+
+> **Lot 10 — améliorations V2+ (série multi-PR, à partir du 2026-07-26).** Sûreté &
+> gouvernance du moteur : proptest sur opérations git RÉELLES (A1), test apply à travers
+> un merge (A3) + mapping complet (A4), préservation des trailers protégés à travers un
+> squash/drop (A2), re-signature optionnelle SSH/GPG des commits réécrits (B1). Parité CI :
+> détection de PR + purge d'artefacts Azure DevOps (B2), checkpoint de suppression/purge en
+> masse persisté en SQLite pour reprise fiable (B3). Skills : normalisation en lot par skill
+> (C2).
+>
+> **C1 — résolution INTERACTIVE des conflits de rejeu (PR7).** Jusqu'ici un rejeu de
+> structure linéaire qui conflictait était abandonné (erreur). Désormais il se met **en
+> pause** : `sequencer_start` lance `git rebase -i` dans un worktree DÉDIÉ et, sur conflit,
+> conserve ce worktree au lieu d'abandonner (`RebaseStep::Conflict` exposant les fichiers à
+> marqueurs) ; le plan passe au statut `Conflict`. L'utilisateur édite chaque fichier
+> (`plan_conflict_resolve` → `git add`), puis reprend (`plan_conflict_continue` →
+> `git rebase --continue`) ; la reprise peut buter sur le conflit SUIVANT (le plan reste en
+> pause) ou aboutir (préview écrite, `DryRunOk`). `plan_conflict_abort` fait
+> `git rebase --abort`, nettoie le worktree et remet le plan en brouillon. La branche n'est
+> JAMAIS touchée pendant tout le cycle (le rejeu vit dans le worktree ; seul l'`apply`
+> final bascule la réf). Registre de sessions en mémoire côté `Core` (plan_id → dossier de
+> session) ; au redémarrage un worktree orphelin est simplement re-créé au prochain dry-run.
+> **Invariant assoupli à bon escient** : « pas de drop ⇒ arbre final identique » ne vaut que
+> pour un rejeu SANS conflit — dès qu'un humain résout un conflit, l'arbre peut légitimement
+> différer (c'est le sens de la résolution), donc le contrôle est désactivé sur ce chemin.
+> Portée : sequencer LINÉAIRE (cas de conflit courant) ; le sequencer de merge
+> (`--rebase-merges`) reste abandon-sur-conflit (documenté). UI : panneau de résolution dans
+> Analyse (éditeurs par fichier, badge « marqueurs restants », boutons Résoudre/Reprendre &
+> Abandonner ; reprise désactivée tant que des marqueurs subsistent). **Vérifié localement :
+> 2 tests d'intégration dédiés (pause→résolution multi-tours→préview ; abandon→brouillon) +
+> le proptest git réel étendu au chemin conflit ; suite cœur entièrement verte ; front
+> `tsc` vert, app chargée sans erreur console.** Reste au backlog : découpe de commit (C3,
+> PR8) ; distribution multi-OS + chaîne d'appro (D1/D2/D3, PR9) ; `tauri-plugin-updater`
+> signé (keypair minisign toujours indisponible sur ce poste).

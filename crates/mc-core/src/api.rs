@@ -28,6 +28,11 @@ pub struct Core {
     /// (diff, fichiers, trailers…). Le champ `on_remote`, dépendant du contexte,
     /// est TOUJOURS recalculé à chaque scan et n'est jamais servi depuis le cache.
     analysis_cache: Mutex<HashMap<String, CommitInfo>>,
+    /// Sessions de résolution INTERACTIVE de conflits (C1) : plan_id → dossier de
+    /// session (worktree git en pause). Une entrée existe tant que le dry-run d'un
+    /// plan est suspendu sur un conflit. En mémoire seulement : au redémarrage,
+    /// un worktree orphelin est simplement re-créé au prochain dry-run.
+    conflicts: Mutex<HashMap<String, PathBuf>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +141,7 @@ impl Core {
                 .or_else(|_| std::env::var("USER"))
                 .unwrap_or_else(|_| "local".into()),
             analysis_cache: Mutex::new(HashMap::new()),
+            conflicts: Mutex::new(HashMap::new()),
         })
     }
 
@@ -145,6 +151,7 @@ impl Core {
             skills_dir,
             actor: "test".into(),
             analysis_cache: Mutex::new(HashMap::new()),
+            conflicts: Mutex::new(HashMap::new()),
         })
     }
 
@@ -421,29 +428,128 @@ impl Core {
         self.plan_dry_run_with(plan_id, &TaskCtx::noop("plan_dry_run"))
     }
 
+    /// Dossier de session (worktree en pause) pour la résolution interactive de
+    /// conflits d'un plan. Déterministe par plan : un nouveau dry-run réutilise
+    /// et nettoie le même emplacement.
+    fn conflict_session_dir(plan_id: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join("mister-commitia")
+            .join(format!("conflict-{plan_id}"))
+    }
+
+    /// Abandonne (si présente) la session de conflit d'un plan : `git rebase
+    /// --abort`, suppression du worktree, retrait du registre.
+    fn abort_conflict_session(&self, repo: &git2::Repository, plan_id: &str) {
+        if let Some(dir) = self.conflicts.lock().unwrap().remove(plan_id) {
+            crate::gitx::rewrite::sequencer_abort(repo, &dir);
+        }
+    }
+
     pub fn plan_dry_run_with(&self, plan_id: &str, ctx: &TaskCtx) -> Result<Plan> {
         let mut plan = self.store.plan_get(plan_id)?;
         let r = self.store.repo_get(&plan.repo_id)?;
         let repo = GitEngine::open(&r.local_path)?;
-        let outcome = PlanEngine::dry_run(&r, &repo, &mut plan, ctx);
-        match &outcome {
-            Ok(()) => self.audit(
-                "git_rewrite",
-                "dry_run",
-                &format!("{}:{}", r.name, plan.fingerprint.branch),
-                json!({"plan": plan.id, "ops": plan.ops.len()}),
-                "ok",
-            ),
-            Err(e) => self.audit(
-                "git_rewrite",
-                "dry_run",
-                &format!("{}:{}", r.name, plan.fingerprint.branch),
-                json!({"plan": plan.id}),
-                &format!("erreur : {e}"),
-            ),
+        // Toute session de conflit antérieure de ce plan est obsolète : on l'abandonne
+        // avant de relancer un dry-run propre.
+        self.abort_conflict_session(&repo, plan_id);
+        let session_dir = Self::conflict_session_dir(plan_id);
+        let _ = std::fs::remove_dir_all(&session_dir); // reste éventuel d'une session orpheline
+        let outcome = PlanEngine::dry_run(&r, &repo, &mut plan, Some(&session_dir), ctx);
+        // Un conflit met le plan EN PAUSE (dry_run renvoie Ok) : on mémorise la session.
+        if matches!(outcome, Ok(())) && plan.status == PlanStatus::Conflict {
+            self.conflicts
+                .lock()
+                .unwrap()
+                .insert(plan_id.to_string(), session_dir);
         }
+        let result = match (&outcome, &plan.status) {
+            (Ok(()), PlanStatus::Conflict) => "conflit (en pause pour résolution)".to_string(),
+            (Ok(()), _) => "ok".to_string(),
+            (Err(e), _) => format!("erreur : {e}"),
+        };
+        self.audit(
+            "git_rewrite",
+            "dry_run",
+            &format!("{}:{}", r.name, plan.fingerprint.branch),
+            json!({"plan": plan.id, "ops": plan.ops.len()}),
+            &result,
+        );
         self.store.plan_save(&plan)?;
         outcome.map(|_| plan)
+    }
+
+    /// C1 — enregistre le contenu résolu d'UN fichier en conflit (puis `git add`).
+    /// N'avance pas le rejeu : appeler `plan_conflict_continue` une fois TOUS les
+    /// fichiers résolus.
+    pub fn plan_conflict_resolve(&self, plan_id: &str, file: &str, content: &str) -> Result<()> {
+        let dir = self
+            .conflicts
+            .lock()
+            .unwrap()
+            .get(plan_id)
+            .cloned()
+            .ok_or_else(|| CoreError::Refused("aucune session de conflit pour ce plan".into()))?;
+        crate::gitx::rewrite::conflict_resolve(&dir, file, content)
+    }
+
+    pub fn plan_conflict_continue(&self, plan_id: &str) -> Result<Plan> {
+        self.plan_conflict_continue_with(plan_id, &TaskCtx::noop("plan_conflict_continue"))
+    }
+
+    /// C1 — poursuit un dry-run mis en pause sur conflit après résolution. Si le
+    /// rejeu se termine, la préview est écrite (DryRunOk) et la session fermée ;
+    /// s'il bute sur un nouveau conflit, le plan reste en pause.
+    pub fn plan_conflict_continue_with(&self, plan_id: &str, ctx: &TaskCtx) -> Result<Plan> {
+        let dir = self
+            .conflicts
+            .lock()
+            .unwrap()
+            .get(plan_id)
+            .cloned()
+            .ok_or_else(|| CoreError::Refused("aucune session de conflit pour ce plan".into()))?;
+        let mut plan = self.store.plan_get(plan_id)?;
+        let r = self.store.repo_get(&plan.repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        let outcome = PlanEngine::dry_run_continue(&r, &repo, &mut plan, &dir, ctx);
+        // Session fermée par le sequencer dès qu'il n'y a plus de conflit.
+        if matches!(outcome, Ok(())) && plan.status != PlanStatus::Conflict {
+            self.conflicts.lock().unwrap().remove(plan_id);
+        }
+        let result = match (&outcome, &plan.status) {
+            (Ok(()), PlanStatus::Conflict) => "conflit (toujours en pause)".to_string(),
+            (Ok(()), _) => "ok".to_string(),
+            (Err(e), _) => format!("erreur : {e}"),
+        };
+        self.audit(
+            "git_rewrite",
+            "dry_run_continue",
+            &format!("{}:{}", r.name, plan.fingerprint.branch),
+            json!({"plan": plan.id}),
+            &result,
+        );
+        self.store.plan_save(&plan)?;
+        outcome.map(|_| plan)
+    }
+
+    /// C1 — abandonne la résolution de conflit : `git rebase --abort`, nettoyage
+    /// du worktree, retour du plan en Draft.
+    pub fn plan_conflict_abort(&self, plan_id: &str) -> Result<Plan> {
+        let mut plan = self.store.plan_get(plan_id)?;
+        let r = self.store.repo_get(&plan.repo_id)?;
+        let repo = GitEngine::open(&r.local_path)?;
+        self.abort_conflict_session(&repo, plan_id);
+        plan.status = PlanStatus::Draft;
+        plan.conflict = None;
+        plan.error = None;
+        self.audit(
+            "git_rewrite",
+            "dry_run_abort",
+            &format!("{}:{}", r.name, plan.fingerprint.branch),
+            json!({"plan": plan.id}),
+            "abandon",
+        );
+        self.store.plan_save(&plan)?;
+        Ok(plan)
     }
 
     pub fn plan_apply(&self, plan_id: &str, confirm: Option<String>) -> Result<Plan> {
