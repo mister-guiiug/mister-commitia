@@ -110,6 +110,11 @@ const STRINGS: Record<string, Entry> = {
     fr: "La normalisation des messages est soumise à ces règles : si la politique du dépôt impose la traçabilité des contributions assistées, l'application refuse la suppression et l'explique. Chaque normalisation appliquée est journalisée avec le contenu retiré.",
     en: "Message normalization is subject to these rules: if the repository policy mandates traceability of assisted contributions, the app refuses removal and explains why. Every applied normalization is logged with the removed content.",
   },
+  "set.gov.resign": { fr: "Re-signer les commits réécrits", en: "Re-sign rewritten commits" },
+  "set.gov.resignHint": {
+    fr: "Si une clé de signature est configurée dans le dépôt (user.signingkey + gpg.format), les commits produits par la réécriture sont re-signés — sinon la réécriture perd les signatures.",
+    en: "If a signing key is configured in the repository (user.signingkey + gpg.format), commits produced by the rewrite are re-signed — otherwise rewriting drops signatures.",
+  },
   "set.gov.save": { fr: "Enregistrer la gouvernance", en: "Save governance" },
 
   // -- Dépôts (Repos) --------------------------------------------------------

@@ -7,6 +7,7 @@ export interface Governance {
   ai_attribution_policy: AiAttributionPolicy;
   signature_patterns: string[];
   convention_types: string[];
+  resign_after_rewrite: boolean;
 }
 
 export interface RepoRef {
