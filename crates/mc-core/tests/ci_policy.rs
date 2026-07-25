@@ -441,7 +441,7 @@ async fn f7_batch_delete_throttles_and_resumes() {
 
 /// F7 (extension) : purge des logs/artefacts d'un run — reclaim de STOCKAGE qui
 /// CONSERVE le run. Confirmation par le nombre de runs ; artefacts listés puis
-/// supprimés, logs supprimés ; un run en cours est ignoré ; AzDO non couvert.
+/// supprimés, logs supprimés ; un run en cours est ignoré (chemin GitHub).
 #[tokio::test]
 async fn f7_purge_logs_and_artifacts() {
     std::env::set_var("MC_SECRETS_MODE", "memory");
@@ -525,14 +525,6 @@ async fn f7_purge_logs_and_artifacts() {
         .await
         .unwrap();
     assert_eq!(res.runs, 0);
-
-    // Azure DevOps : la purge d'artefacts n'est pas couverte par ce chemin.
-    let az = account(&server.base_url(), CiKind::AzureDevops);
-    let azc = mc_core::ci::CiClient::from_account(&az, "t".into()).unwrap();
-    assert!(
-        azc.run_artifacts(&target).await.is_err(),
-        "AzDO non couvert"
-    );
 }
 
 /// F4 : détection des PR ouvertes via l'API GitHub (push assisté) ; Azure
@@ -555,10 +547,6 @@ async fn f4_github_list_open_prs() {
     assert_eq!(prs[0].number, 42);
     assert!(prs[0].title.contains("express"));
     assert_eq!(prs[1].url, "http://x/43");
-
-    let az = account(&server.base_url(), CiKind::AzureDevops);
-    let azc = mc_core::ci::CiClient::from_account(&az, "t".into()).unwrap();
-    assert!(azc.list_open_prs("b").await.is_err(), "AzDO non couvert");
 }
 
 /// Inventaire Azure DevOps : keepForever/retainedByRelease ⇒ marqué retenu.
@@ -633,4 +621,69 @@ async fn f12_azdo_api_version_negotiation() {
         1,
         "aucune reprise sur un 400 générique"
     );
+}
+
+/// B2 : parité Azure DevOps — détection des PR ACTIVES via l'API Git Pull
+/// Requests, filtrée par branche source (comme GitHub, F4).
+#[tokio::test]
+async fn b2_azdo_list_open_prs() {
+    let server = MockServer::start();
+    server.add(
+        "GET",
+        "/proj/_apis/git/repositories/r/pullrequests",
+        200,
+        &[],
+        r#"{"count":1,"value":[{"pullRequestId":77,"title":"feat: azdo pr","sourceRefName":"refs/heads/feature/x"}]}"#,
+    );
+    let acct = account(&server.base_url(), CiKind::AzureDevops);
+    let client = mc_core::ci::CiClient::from_account(&acct, "pat-secret-pr".into()).unwrap();
+    let prs = client.list_open_prs("feature/x").await.unwrap();
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].number, 77);
+    assert!(prs[0].title.contains("azdo"), "{}", prs[0].title);
+    assert!(
+        prs[0].url.contains("/_git/r/pullrequest/77"),
+        "url: {}",
+        prs[0].url
+    );
+}
+
+/// B2 : parité Azure DevOps — purge des artefacts d'un build (liste + suppression
+/// par NOM dans le contexte du build). Les logs AzDO ne sont pas purgeables
+/// séparément : erreur claire.
+#[tokio::test]
+async fn b2_azdo_purge_artifacts() {
+    let server = MockServer::start();
+    server.add(
+        "GET",
+        "/proj/_apis/build/builds/55/artifacts",
+        200,
+        &[],
+        r#"{"count":1,"value":[{"id":1,"name":"drop","resource":{"properties":{"artifactsize":"2048"}}}]}"#,
+    );
+    server.add(
+        "DELETE",
+        "/proj/_apis/build/builds/55/artifacts",
+        204,
+        &[],
+        "",
+    );
+    let acct = account(&server.base_url(), CiKind::AzureDevops);
+    let client = mc_core::ci::CiClient::from_account(&acct, "pat-secret-art".into()).unwrap();
+    let r = run("55", "3", 100, false, false);
+
+    let arts = client.run_artifacts(&r).await.unwrap();
+    assert_eq!(arts.len(), 1);
+    assert_eq!(arts[0].name, "drop");
+    assert_eq!(arts[0].size_bytes, 2048);
+
+    // Suppression par nom, dans le contexte du build.
+    client.delete_artifact(&r, &arts[0].id).await.unwrap();
+    assert_eq!(
+        server.hits("DELETE", "/proj/_apis/build/builds/55/artifacts"),
+        1
+    );
+
+    // Les logs AzDO ne sont pas purgeables séparément.
+    assert!(client.delete_run_logs(&r).await.is_err());
 }

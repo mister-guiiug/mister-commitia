@@ -1580,7 +1580,7 @@ impl Core {
                         for a in arts {
                             // Un essai + une reprise sur 429 (attente annulable).
                             for attempt in 0..2 {
-                                match client.delete_artifact(&a.id).await {
+                                match client.delete_artifact(run, &a.id).await {
                                     Ok(()) => {
                                         run_arts += 1;
                                         break;
