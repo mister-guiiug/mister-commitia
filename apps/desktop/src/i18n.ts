@@ -321,6 +321,35 @@ const STRINGS: Record<string, Entry> = {
   "an.st.dryRunOk": { fr: "dry-run OK", en: "dry-run OK" },
   "an.st.applied": { fr: "appliqué", en: "applied" },
   "an.st.rolledBack": { fr: "restauré", en: "rolled back" },
+  "an.st.conflict": { fr: "conflit", en: "conflict" },
+  "an.cf.title": {
+    fr: "Conflit de rejeu — résolution interactive",
+    en: "Replay conflict — interactive resolution",
+  },
+  "an.cf.help": {
+    fr: "Le rejeu est EN PAUSE : édite le contenu ci-dessous pour lever les conflits (supprime les marqueurs), puis reprends. La branche n'est pas touchée ; abandonner remet le plan en brouillon.",
+    en: "The replay is PAUSED: edit the content below to resolve the conflicts (remove the markers), then continue. The branch is untouched; aborting resets the plan to draft.",
+  },
+  "an.cf.continue": { fr: "Résoudre et reprendre", en: "Resolve & continue" },
+  "an.cf.abort": { fr: "Abandonner", en: "Abort" },
+  "an.cf.markers": {
+    fr: "Astuce : les lignes <<<<<<< ======= >>>>>>> délimitent les versions en conflit — ne laisse que le contenu voulu.",
+    en: "Tip: the <<<<<<< ======= >>>>>>> lines delimit the conflicting versions — keep only the intended content.",
+  },
+  "an.cf.markersLeft": { fr: "marqueurs restants", en: "markers remain" },
+  "an.cf.toastPaused": {
+    fr: "Conflit de rejeu — résolution interactive requise (branche intacte)",
+    en: "Replay conflict — interactive resolution required (branch untouched)",
+  },
+  "an.cf.toastNext": { fr: "Conflit suivant à résoudre", en: "Next conflict to resolve" },
+  "an.cf.toastDone": {
+    fr: "Rejeu terminé — préview prête, branche intacte",
+    en: "Replay finished — preview ready, branch untouched",
+  },
+  "an.cf.toastAbort": {
+    fr: "Résolution abandonnée — plan revenu en brouillon",
+    en: "Resolution aborted — plan back to draft",
+  },
 };
 
 let current: Lang = (localStorage.getItem(KEY) as Lang) || "fr";

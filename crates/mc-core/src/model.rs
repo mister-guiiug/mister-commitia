@@ -229,6 +229,9 @@ pub enum PlanStatus {
     Applied,
     RolledBack,
     Invalidated,
+    /// Le rejeu du dry-run est EN PAUSE sur un conflit (C1) : résolution
+    /// interactive attendue (résoudre → continuer, ou abandonner).
+    Conflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -243,6 +246,20 @@ pub struct Fingerprint {
 pub struct ShaMapping {
     pub old: Vec<String>,
     pub new: String,
+}
+
+/// Un fichier en conflit pendant un rejeu (C1) : `content` porte les marqueurs
+/// `<<<<<<<`/`=======`/`>>>>>>>` que l'utilisateur édite pour résoudre.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictFile {
+    pub path: String,
+    pub content: String,
+}
+
+/// État d'un conflit de rejeu en pause (C1).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictInfo {
+    pub files: Vec<ConflictFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +280,9 @@ pub struct Plan {
     pub dry_run_at: Option<String>,
     pub applied_at: Option<String>,
     pub error: Option<String>,
+    /// Détail du conflit quand `status == Conflict` (C1).
+    #[serde(default)]
+    pub conflict: Option<ConflictInfo>,
 }
 
 // ---------------------------------------------------------------------------

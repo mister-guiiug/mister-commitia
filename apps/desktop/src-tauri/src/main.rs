@@ -202,6 +202,53 @@ async fn plan_apply(
     res?
 }
 
+/// C1 — enregistre le contenu résolu d'un fichier en conflit (puis `git add`).
+#[tauri::command]
+async fn plan_conflict_resolve(
+    core: tauri::State<'_, ArcCore>,
+    plan_id: String,
+    file: String,
+    content: String,
+) -> CmdResult<()> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        core.plan_conflict_resolve(&plan_id, &file, &content)
+            .map_err(err)
+    })
+    .await
+    .map_err(join_err)?
+}
+
+/// C1 — reprend un dry-run mis en pause sur conflit (après résolution).
+#[tauri::command]
+async fn plan_conflict_continue(
+    app: tauri::AppHandle,
+    tasks: tauri::State<'_, Tasks>,
+    core: tauri::State<'_, ArcCore>,
+    plan_id: String,
+    task_id: Option<String>,
+) -> CmdResult<Plan> {
+    let ctx = task_ctx(&app, &tasks, "plan_conflict_continue", &task_id);
+    let core = core.inner().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        core.plan_conflict_continue_with(&plan_id, &ctx)
+            .map_err(err)
+    })
+    .await
+    .map_err(join_err);
+    task_done(&tasks, &task_id);
+    res?
+}
+
+/// C1 — abandonne la résolution de conflit (retour du plan en Draft).
+#[tauri::command]
+async fn plan_conflict_abort(core: tauri::State<'_, ArcCore>, plan_id: String) -> CmdResult<Plan> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.plan_conflict_abort(&plan_id).map_err(err))
+        .await
+        .map_err(join_err)?
+}
+
 #[tauri::command]
 async fn plan_rollback(core: tauri::State<'_, ArcCore>, plan_id: String) -> CmdResult<Plan> {
     let core = core.inner().clone();
@@ -624,6 +671,9 @@ fn main() {
             plan_set_ops,
             plan_dry_run,
             plan_apply,
+            plan_conflict_resolve,
+            plan_conflict_continue,
+            plan_conflict_abort,
             plan_rollback,
             plan_list,
             plan_risk,

@@ -545,3 +545,192 @@ pub fn sequencer_rebase_merges(
     cleanup(&repo_dir, &wt, &scratch);
     Ok((new_tip, map))
 }
+
+/// Résultat d'un pas de rejeu INTERACTIF (C1) : soit terminé (nouveau sommet),
+/// soit EN PAUSE sur un conflit (le worktree est conservé pour résolution).
+pub enum RebaseStep {
+    Done(Oid),
+    /// Fichiers en conflit : (chemin relatif, contenu AVEC les marqueurs).
+    Conflict(Vec<(String, String)>),
+}
+
+/// Nettoie le worktree lié et le dossier de session.
+fn cleanup_session(repo_dir: &Path, session_dir: &Path) {
+    let wt = session_dir.join("wt");
+    let _ = run_git(
+        repo_dir,
+        &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        &[],
+    );
+    let _ = run_git(repo_dir, &["worktree", "prune"], &[]);
+    let _ = std::fs::remove_dir_all(session_dir);
+}
+
+/// Lit les fichiers en conflit du worktree (chemin + contenu à marqueurs).
+fn conflicted_files(wt: &Path) -> Vec<(String, String)> {
+    run_git(wt, &["diff", "--name-only", "--diff-filter=U"], &[])
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|p| {
+            let content = std::fs::read_to_string(wt.join(p)).unwrap_or_default();
+            (p.to_string(), content)
+        })
+        .collect()
+}
+
+/// Interprète le résultat d'un `git rebase` (start ou --continue) : succès →
+/// Done (worktree nettoyé) ; conflit (fichiers non fusionnés) → Conflict
+/// (worktree CONSERVÉ) ; annulation ou autre échec → abort + nettoyage + erreur.
+fn step_from_result(
+    repo_dir: &Path,
+    session_dir: &Path,
+    res: Result<String>,
+) -> Result<RebaseStep> {
+    let wt = session_dir.join("wt");
+    match res {
+        Ok(_) => {
+            let head = run_git(&wt, &["rev-parse", "HEAD"], &[])?;
+            let new_tip = Oid::from_str(&head).map_err(|e| CoreError::Git(e.to_string()))?;
+            cleanup_session(repo_dir, session_dir);
+            Ok(RebaseStep::Done(new_tip))
+        }
+        Err(CoreError::Cancelled) => {
+            let _ = run_git(&wt, &["rebase", "--abort"], &[]);
+            cleanup_session(repo_dir, session_dir);
+            Err(CoreError::Cancelled)
+        }
+        Err(e) => {
+            let files = conflicted_files(&wt);
+            if files.is_empty() {
+                let _ = run_git(&wt, &["rebase", "--abort"], &[]);
+                cleanup_session(repo_dir, session_dir);
+                Err(CoreError::Refused(format!(
+                    "le rejeu de la structure a échoué (hors conflit résoluble) : {e}"
+                )))
+            } else {
+                // Conflit : on LAISSE le worktree en pause pour résolution.
+                Ok(RebaseStep::Conflict(files))
+            }
+        }
+    }
+}
+
+/// Démarre un rejeu de structure LINÉAIRE dans `session_dir` SANS abandonner sur
+/// conflit (C1). Comme `sequencer_rebase`, mais renvoie `RebaseStep::Conflict`
+/// en laissant le worktree prêt pour `sequencer_continue`/`sequencer_abort`.
+pub fn sequencer_start(
+    repo: &Repository,
+    session_dir: &Path,
+    base: Oid,
+    tip: Oid,
+    groups: &[TodoGroup],
+    cancel: &CancelToken,
+) -> Result<RebaseStep> {
+    if groups.is_empty() {
+        return Err(CoreError::Refused(
+            "le plan supprimerait tous les commits du segment".into(),
+        ));
+    }
+    let repo_dir = repo
+        .workdir()
+        .ok_or_else(|| CoreError::Refused("dépôt bare non supporté".into()))?
+        .to_path_buf();
+    let wt = session_dir.join("wt");
+    let todo_src = session_dir.join("todo.txt");
+    let hooks_empty = session_dir.join("hooks-vides");
+    std::fs::create_dir_all(&hooks_empty)?;
+
+    let mut todo = String::new();
+    for g in groups {
+        todo.push_str(&format!("pick {}\n", g.leader));
+        for f in &g.fixups {
+            todo.push_str(&format!("fixup {}\n", f));
+        }
+    }
+    std::fs::write(&todo_src, &todo)?;
+
+    run_git(
+        &repo_dir,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            &wt.to_string_lossy(),
+            &tip.to_string(),
+        ],
+        &[],
+    )?;
+
+    let envs = [
+        ("GIT_SEQUENCE_EDITOR", format!("cp '{}'", posix(&todo_src))),
+        ("GIT_EDITOR", "true".to_string()),
+    ];
+    let res = run_git_cancellable(
+        &wt,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            &format!("core.hooksPath={}", posix(&hooks_empty)),
+            "rebase",
+            "-i",
+            "--onto",
+            &base.to_string(),
+            &base.to_string(),
+        ],
+        &envs,
+        cancel,
+    );
+    step_from_result(&repo_dir, session_dir, res)
+}
+
+/// Poursuit un rejeu en pause après résolution (`git rebase --continue`).
+pub fn sequencer_continue(
+    repo: &Repository,
+    session_dir: &Path,
+    cancel: &CancelToken,
+) -> Result<RebaseStep> {
+    let repo_dir = repo
+        .workdir()
+        .ok_or_else(|| CoreError::Refused("dépôt bare non supporté".into()))?
+        .to_path_buf();
+    let wt = session_dir.join("wt");
+    let hooks_empty = session_dir.join("hooks-vides");
+    let envs = [("GIT_EDITOR", "true".to_string())];
+    let res = run_git_cancellable(
+        &wt,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            &format!("core.hooksPath={}", posix(&hooks_empty)),
+            "rebase",
+            "--continue",
+        ],
+        &envs,
+        cancel,
+    );
+    step_from_result(&repo_dir, session_dir, res)
+}
+
+/// Abandonne un rejeu en pause (`git rebase --abort`) et nettoie la session.
+pub fn sequencer_abort(repo: &Repository, session_dir: &Path) {
+    if let Some(repo_dir) = repo.workdir() {
+        let wt = session_dir.join("wt");
+        let _ = run_git(&wt, &["rebase", "--abort"], &[]);
+        cleanup_session(repo_dir, session_dir);
+    }
+}
+
+/// Écrit le contenu résolu d'un fichier en conflit puis le stage (`git add`).
+pub fn conflict_resolve(session_dir: &Path, file: &str, content: &str) -> Result<()> {
+    let wt = session_dir.join("wt");
+    let target = wt.join(file);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, content)?;
+    run_git(&wt, &["add", "--", file], &[])?;
+    Ok(())
+}

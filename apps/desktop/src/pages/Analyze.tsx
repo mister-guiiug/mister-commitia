@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  CheckCircle2, Download, FileText, FlaskConical, GitBranch, GitGraph as GitGraphIcon, List,
-  Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload, UploadCloud, XCircle,
+  AlertTriangle, CheckCircle2, Download, FileText, FlaskConical, GitBranch,
+  GitGraph as GitGraphIcon, List, Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload,
+  UploadCloud, XCircle,
 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import type {
@@ -36,6 +37,8 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [editing, setEditing] = useState<Record<string, string>>({});
   const [plan, setPlan] = useState<Plan | null>(null);
+  // C1 — contenu édité (résolution) par fichier en conflit, pendant une pause de rejeu.
+  const [conflictEdits, setConflictEdits] = useState<Record<string, string>>({});
   const [risks, setRisks] = useState<RiskAxis[]>([]);
   const [drops, setDrops] = useState<Set<string>>(new Set());
   const [consent, setConsent] = useState<{ preview: string; groups: string[][] } | null>(null);
@@ -273,15 +276,67 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     setBusy(true);
     const taskId = task.begin("Dry-run du plan");
     try {
-      setPlan(await call<Plan>("plan_dry_run", { planId: plan.id, taskId }));
-      setRisks(await call<RiskAxis[]>("plan_risk", { planId: plan.id }));
-      toast("success", "Dry-run réussi — résultat réel construit dans la préview, branche intacte");
+      const updated = await call<Plan>("plan_dry_run", { planId: plan.id, taskId });
+      setPlan(updated);
+      setConflictEdits({});
+      if (updated.status === "conflict") {
+        toast("info", t("an.cf.toastPaused"));
+      } else {
+        setRisks(await call<RiskAxis[]>("plan_risk", { planId: plan.id }));
+        toast("success", "Dry-run réussi — résultat réel construit dans la préview, branche intacte");
+      }
     } catch (e) {
       const ie = asIpcError(e);
       if (ie.code === "cancelled") toast("info", "Dry-run annulé — branche et préview intactes");
       else setError(ie.message);
     } finally {
       task.end();
+      setBusy(false);
+    }
+  };
+
+  // C1 — enregistre chaque fichier résolu puis reprend le rejeu. Une reprise peut
+  // buter sur un conflit SUIVANT (le plan reste alors en pause) ou aboutir (DryRunOk).
+  const continueConflict = async () => {
+    if (!plan?.conflict) return;
+    setError(null);
+    setBusy(true);
+    const taskId = task.begin("Reprise du rejeu après résolution");
+    try {
+      for (const cf of plan.conflict.files) {
+        const content = conflictEdits[cf.path] ?? cf.content;
+        await call("plan_conflict_resolve", { planId: plan.id, file: cf.path, content });
+      }
+      const updated = await call<Plan>("plan_conflict_continue", { planId: plan.id, taskId });
+      setPlan(updated);
+      setConflictEdits({});
+      if (updated.status === "conflict") {
+        toast("info", t("an.cf.toastNext"));
+      } else {
+        setRisks(await call<RiskAxis[]>("plan_risk", { planId: plan.id }));
+        toast("success", t("an.cf.toastDone"));
+      }
+    } catch (e) {
+      const ie = asIpcError(e);
+      if (ie.code === "cancelled") toast("info", "Reprise annulée");
+      else setError(ie.message);
+    } finally {
+      task.end();
+      setBusy(false);
+    }
+  };
+
+  const abortConflict = async () => {
+    if (!plan) return;
+    setError(null);
+    setBusy(true);
+    try {
+      setPlan(await call<Plan>("plan_conflict_abort", { planId: plan.id }));
+      setConflictEdits({});
+      toast("info", t("an.cf.toastAbort"));
+    } catch (e) {
+      setError(asIpcError(e).message);
+    } finally {
       setBusy(false);
     }
   };
@@ -451,6 +506,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         plan.status === "applied" ? "teal"
         : plan.status === "dry_run_ok" ? "sky"
         : plan.status === "rolled_back" ? "amber"
+        : plan.status === "conflict" ? "rose"
         : "slate"
       }
     >
@@ -458,6 +514,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
         : plan.status === "dry_run_ok" ? t("an.st.dryRunOk")
         : plan.status === "applied" ? t("an.st.applied")
         : plan.status === "rolled_back" ? t("an.st.rolledBack")
+        : plan.status === "conflict" ? t("an.st.conflict")
         : plan.status}
     </Badge>
   );
@@ -885,6 +942,55 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                   </li>
                 ))}
               </ol>
+
+              {plan.status === "conflict" && plan.conflict && (
+                <div className="space-y-2 rounded border border-rose-800/60 bg-rose-950/20 p-3">
+                  <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-rose-300">
+                    <AlertTriangle size={ICON_SM} /> {t("an.cf.title")}
+                  </h3>
+                  <p className="text-xs text-slate-400">{t("an.cf.help")}</p>
+                  {plan.conflict.files.map((cf) => {
+                    const val = conflictEdits[cf.path] ?? cf.content;
+                    const stillMarked = val.includes("<<<<<<<") || val.includes(">>>>>>>");
+                    return (
+                      <div key={cf.path} className="space-y-1">
+                        <div className={"flex items-center gap-2 " + shaCls}>
+                          {cf.path}
+                          {stillMarked && (
+                            <Badge tone="amber">{t("an.cf.markersLeft")}</Badge>
+                          )}
+                        </div>
+                        <textarea
+                          className={inputCls + " h-48 font-mono text-xs"}
+                          spellCheck={false}
+                          aria-label={`Résolution de ${cf.path}`}
+                          value={val}
+                          onChange={(e) =>
+                            setConflictEdits((s) => ({ ...s, [cf.path]: e.target.value }))
+                          }
+                        />
+                      </div>
+                    );
+                  })}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      kind="primary"
+                      onClick={continueConflict}
+                      loading={busy}
+                      disabled={plan.conflict.files.some((cf) => {
+                        const v = conflictEdits[cf.path] ?? cf.content;
+                        return v.includes("<<<<<<<") || v.includes(">>>>>>>");
+                      })}
+                    >
+                      <CheckCircle2 size={ICON_SM} /> {t("an.cf.continue")}
+                    </Button>
+                    <Button kind="ghost" onClick={abortConflict} loading={busy}>
+                      <XCircle size={ICON_SM} /> {t("an.cf.abort")}
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-amber-400/80">{t("an.cf.markers")}</p>
+                </div>
+              )}
 
               {risks.length > 0 && (
                 <div>

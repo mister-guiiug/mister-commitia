@@ -156,6 +156,8 @@ const mock = {
     { seq: 1, ts: "2026-07-24T09:00:00Z", actor: "demo", category: "config", action: "repo_declare", target: "webapp-checkout", params: {}, result: "ok" },
   ] as AuditEvent[],
   simulated: false,
+  // DEMO C1 : plans dont le conflit de rejeu a déjà été résolu (ne re-conflicte plus).
+  resolvedConflicts: new Set<string>(),
   skillsYaml: {
     "conventional-commits": "apiVersion: mister-commitia/skill.v1\nname: conventional-commits\nversion: 1.2.0\nowner: platform-team@example.org\nstatus: published\ndescription: >\n  Reformule un message selon Conventional Commits 1.0.0.\n",
     "commit-synthesis": "apiVersion: mister-commitia/skill.v1\nname: commit-synthesis\nversion: 1.0.0\nowner: platform-team@example.org\nstatus: published\ndescription: Synthèse de groupe.\n",
@@ -377,14 +379,36 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
         fingerprint: { branch: String(args.branch), tip: demoCommits[3].sha, base: "00".padEnd(40, "9") },
         status: "draft", ops: [], dry_run_hash: null, preview_ref: null, backup_ref: null,
         backup_tag: null, mapping: [], created_at: now(), dry_run_at: null, applied_at: null, error: null,
+        conflict: null,
       };
       mock.plans.unshift(p); return p;
     }
     case "plan_set_ops": {
       const p = mock.plans.find((x) => x.id === args.planId)!;
+      mock.resolvedConflicts.delete(p.id); // rééditer les ops ré-arme le conflit de démo
       p.ops = args.ops as PlanOp[]; p.status = "draft"; p.mapping = []; return p;
     }
     case "plan_dry_run": {
+      const p = mock.plans.find((x) => x.id === args.planId)!;
+      // DEMO C1 : un réordonnancement des commits de démo (qui touchent le même
+      // fichier) simule un conflit de rejeu à résoudre — sauf s'il l'a déjà été.
+      const hasReorder = p.ops.some((o) => o.op === "reorder");
+      if (hasReorder && !mock.resolvedConflicts.has(p.id)) {
+        await playPhases(args.taskId, "plan_dry_run", [
+          ["vérification de l'empreinte", 0, null, 200],
+          ["rejeu de la structure (sequencer git)", 0, null, 450],
+        ]);
+        p.status = "conflict"; p.dry_run_at = null; p.preview_ref = null; p.mapping = [];
+        p.conflict = {
+          files: [{
+            path: "src/pay.rs",
+            content:
+              "pub fn pay() {\n<<<<<<< (reordonné) HEAD\n    charge_express_v3();\n=======\n    charge_express_v2();\n>>>>>>> commit deplace\n}\n",
+          }],
+        };
+        audit("git_rewrite", "dry_run", p.fingerprint.branch);
+        return p;
+      }
       await playPhases(args.taskId, "plan_dry_run", [
         ["vérification de l'empreinte", 0, null, 250],
         ["rejeu de la structure (sequencer git)", 0, null, 550],
@@ -393,11 +417,35 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
         ["réécriture des messages", 3, 3, 180],
         ["contrôle des invariants et écriture de la préview", 0, null, 250],
       ]);
-      const p = mock.plans.find((x) => x.id === args.planId)!;
-      p.status = "dry_run_ok"; p.dry_run_at = now();
+      p.status = "dry_run_ok"; p.dry_run_at = now(); p.conflict = null;
       p.preview_ref = `refs/mc/preview/${p.id}`;
       p.mapping = demoCommits.slice(0, 3).map((c, i) => ({ old: [c.sha], new: `f${i}`.padEnd(40, "1") }));
       audit("git_rewrite", "dry_run", p.fingerprint.branch);
+      return p;
+    }
+    case "plan_conflict_resolve": {
+      // Mock : la résolution est portée par l'UI (contenu édité) ; rien à stocker.
+      return null;
+    }
+    case "plan_conflict_continue": {
+      const p = mock.plans.find((x) => x.id === args.planId)!;
+      await playPhases(args.taskId, "plan_conflict_continue", [
+        ["rejeu de la structure (sequencer git)", 0, null, 350],
+        ["réécriture des messages", 1, 2, 160],
+        ["contrôle des invariants et écriture de la préview", 0, null, 220],
+      ]);
+      mock.resolvedConflicts.add(p.id);
+      p.status = "dry_run_ok"; p.dry_run_at = now(); p.conflict = null;
+      p.preview_ref = `refs/mc/preview/${p.id}`;
+      p.mapping = demoCommits.slice(0, 3).map((c, i) => ({ old: [c.sha], new: `f${i}`.padEnd(40, "1") }));
+      audit("git_rewrite", "dry_run_continue", p.fingerprint.branch);
+      return p;
+    }
+    case "plan_conflict_abort": {
+      const p = mock.plans.find((x) => x.id === args.planId)!;
+      mock.resolvedConflicts.delete(p.id);
+      p.status = "draft"; p.conflict = null; p.mapping = []; p.preview_ref = null;
+      audit("git_rewrite", "dry_run_abort", p.fingerprint.branch);
       return p;
     }
     case "plan_apply": {

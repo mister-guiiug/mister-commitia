@@ -290,6 +290,7 @@ impl PlanEngine {
             dry_run_at: None,
             applied_at: None,
             error: None,
+            conflict: None,
         })
     }
 
@@ -325,6 +326,7 @@ impl PlanEngine {
         repo_ref: &RepoRef,
         repo: &Repository,
         plan: &mut Plan,
+        session_dir: Option<&std::path::Path>,
         ctx: &TaskCtx,
     ) -> Result<()> {
         Self::ensure_not_protected(repo_ref, &plan.fingerprint.branch)?;
@@ -436,7 +438,8 @@ impl PlanEngine {
             }
         }
 
-        let (final_tip, mapping) = if !compiled.structure_changed {
+        // Reformulation SEULE (aucun changement de structure) : reword direct.
+        if !compiled.structure_changed {
             let (new_tip, map) = if has_merge {
                 rewrite::reword_dag(repo, base, tip, &compiled.messages, ctx)?
             } else {
@@ -459,94 +462,160 @@ impl PlanEngine {
                     new: map[o].to_string(),
                 })
                 .collect::<Vec<_>>();
-            (new_tip, mapping)
-        } else {
-            ctx.step("rejeu de la structure (sequencer git)", 0, None)?;
-            if has_merge {
-                // T10 complet : structure à travers un merge — git préserve la
-                // topologie (`--rebase-merges`), les messages suivent via reword_dag.
-                let (h1, oldnew) = rewrite::sequencer_rebase_merges(
-                    repo,
-                    base,
-                    tip,
-                    &compiled.groups,
-                    &ctx.cancel,
-                )?;
-                let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
-                for (leader, m) in &compiled.messages {
-                    if let Some(nw) = oldnew.get(leader) {
-                        msg_by_new.insert(*nw, m.clone());
-                    }
-                }
-                let (h2, rwmap) = rewrite::reword_dag(repo, base, h1, &msg_by_new, ctx)?;
-                if !compiled.has_drop {
-                    let t_old = repo.find_commit(tip)?.tree_id();
-                    let t_new = repo.find_commit(h2)?.tree_id();
-                    if t_old != t_new {
-                        return Err(CoreError::Git(
-                            "invariant violé : l'arbre final diffère sans drop".into(),
-                        ));
-                    }
-                }
-                let mapping = compiled
-                    .groups
-                    .iter()
-                    .filter_map(|g| {
-                        let n1 = *oldnew.get(&g.leader)?;
-                        let nf = *rwmap.get(&n1).unwrap_or(&n1);
-                        let mut old = vec![g.leader.to_string()];
-                        old.extend(g.fixups.iter().map(|o| o.to_string()));
-                        Some(ShaMapping {
-                            old,
-                            new: nf.to_string(),
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                (h2, mapping)
-            } else {
-                let (h1, groupmap) =
-                    rewrite::sequencer_rebase(repo, base, tip, &compiled.groups, &ctx.cancel)?;
-                let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
-                for (group, new_oid) in &groupmap {
-                    if let Some(m) = compiled.messages.get(&group.leader) {
-                        msg_by_new.insert(*new_oid, m.clone());
-                    }
-                }
-                let (h2, map2) = rewrite::reword_chain(repo, Some(base), h1, &msg_by_new, ctx)?;
-                if !compiled.has_drop {
-                    let t_old = repo.find_commit(tip)?.tree_id();
-                    let t_new = repo.find_commit(h2)?.tree_id();
-                    if t_old != t_new {
-                        return Err(CoreError::Git(
-                            "invariant violé : l'arbre final diffère sans drop".into(),
-                        ));
-                    }
-                }
-                let mapping = groupmap
-                    .iter()
-                    .map(|(g, new_oid)| {
-                        let mut old = vec![g.leader.to_string()];
-                        old.extend(g.fixups.iter().map(|o| o.to_string()));
-                        ShaMapping {
-                            old,
-                            new: map2.get(new_oid).copied().unwrap_or(*new_oid).to_string(),
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                (h2, mapping)
-            }
-        };
+            return Self::finalize_preview(repo_ref, repo, base, new_tip, mapping, plan, ctx);
+        }
 
-        // B1 : re-signature optionnelle des commits réécrits. La réécriture
-        // produit des commits NON signés (git2 ne signe pas, et le sequencer
-        // désactive la signature) ; si la gouvernance l'exige ET qu'une clé est
-        // configurée dans le dépôt, on recrée le segment signé. Sans clé : no-op.
+        ctx.step("rejeu de la structure (sequencer git)", 0, None)?;
+        if has_merge {
+            // T10 complet : structure à travers un merge — git préserve la
+            // topologie (`--rebase-merges`), les messages suivent via reword_dag.
+            let (h1, oldnew) =
+                rewrite::sequencer_rebase_merges(repo, base, tip, &compiled.groups, &ctx.cancel)?;
+            let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
+            for (leader, m) in &compiled.messages {
+                if let Some(nw) = oldnew.get(leader) {
+                    msg_by_new.insert(*nw, m.clone());
+                }
+            }
+            let (h2, rwmap) = rewrite::reword_dag(repo, base, h1, &msg_by_new, ctx)?;
+            if !compiled.has_drop {
+                let t_old = repo.find_commit(tip)?.tree_id();
+                let t_new = repo.find_commit(h2)?.tree_id();
+                if t_old != t_new {
+                    return Err(CoreError::Git(
+                        "invariant violé : l'arbre final diffère sans drop".into(),
+                    ));
+                }
+            }
+            let mapping = compiled
+                .groups
+                .iter()
+                .filter_map(|g| {
+                    let n1 = *oldnew.get(&g.leader)?;
+                    let nf = *rwmap.get(&n1).unwrap_or(&n1);
+                    let mut old = vec![g.leader.to_string()];
+                    old.extend(g.fixups.iter().map(|o| o.to_string()));
+                    Some(ShaMapping {
+                        old,
+                        new: nf.to_string(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            return Self::finalize_preview(repo_ref, repo, base, h2, mapping, plan, ctx);
+        }
+
+        // Structure LINÉAIRE. `session_dir` = Some → rejeu INTERACTIF (C1) : sur
+        // conflit, on met le plan EN PAUSE (worktree conservé) au lieu d'abandonner ;
+        // None → comportement historique (abandon sur conflit).
+        let h1 = match session_dir {
+            Some(dir) => {
+                match rewrite::sequencer_start(repo, dir, base, tip, &compiled.groups, &ctx.cancel)?
+                {
+                    rewrite::RebaseStep::Done(t) => t,
+                    rewrite::RebaseStep::Conflict(files) => {
+                        plan.status = PlanStatus::Conflict;
+                        plan.conflict = Some(ConflictInfo {
+                            files: files
+                                .into_iter()
+                                .map(|(path, content)| ConflictFile { path, content })
+                                .collect(),
+                        });
+                        plan.error = None;
+                        return Ok(());
+                    }
+                }
+            }
+            None => rewrite::sequencer_rebase(repo, base, tip, &compiled.groups, &ctx.cancel)?.0,
+        };
+        Self::finish_linear_structure(repo_ref, repo, base, tip, h1, &compiled, false, plan, ctx)
+    }
+
+    /// Termine un rejeu de structure LINÉAIRE à partir du sommet `h1` (issu du
+    /// sequencer, messages d'origine) : réécrit les messages, contrôle
+    /// l'invariant d'arbre, calcule le mapping, puis écrit la préview. Partagé
+    /// par `dry_run` (chemin direct) et `dry_run_continue` (reprise post-conflit).
+    #[allow(clippy::too_many_arguments)]
+    fn finish_linear_structure(
+        repo_ref: &RepoRef,
+        repo: &Repository,
+        base: Oid,
+        tip: Oid,
+        h1: Oid,
+        compiled: &Compiled,
+        conflict_resolved: bool,
+        plan: &mut Plan,
+        ctx: &TaskCtx,
+    ) -> Result<()> {
+        let new_oids = GitEngine::segment(repo, Some(base), h1)?;
+        if new_oids.len() != compiled.groups.len() {
+            return Err(CoreError::Git(format!(
+                "incohérence après rejeu : {} commits produits pour {} groupes attendus \
+                 (une résolution de conflit a-t-elle rendu un commit vide ?)",
+                new_oids.len(),
+                compiled.groups.len()
+            )));
+        }
+        let groupmap: Vec<(TodoGroup, Oid)> = compiled
+            .groups
+            .iter()
+            .cloned()
+            .zip(new_oids.iter().copied())
+            .collect();
+        let mut msg_by_new: HashMap<Oid, String> = HashMap::new();
+        for (group, new_oid) in &groupmap {
+            if let Some(m) = compiled.messages.get(&group.leader) {
+                msg_by_new.insert(*new_oid, m.clone());
+            }
+        }
+        let (h2, map2) = rewrite::reword_chain(repo, Some(base), h1, &msg_by_new, ctx)?;
+        // Invariant « pas de drop ⇒ arbre final identique » : ne vaut QUE pour un
+        // rejeu SANS conflit. Dès qu'un humain a résolu un conflit à la main, l'arbre
+        // peut légitimement différer (c'est le sens même de la résolution) — on ne
+        // peut donc plus l'exiger.
+        if !compiled.has_drop && !conflict_resolved {
+            let t_old = repo.find_commit(tip)?.tree_id();
+            let t_new = repo.find_commit(h2)?.tree_id();
+            if t_old != t_new {
+                return Err(CoreError::Git(
+                    "invariant violé : l'arbre final diffère sans drop".into(),
+                ));
+            }
+        }
+        let mapping = groupmap
+            .iter()
+            .map(|(g, new_oid)| {
+                let mut old = vec![g.leader.to_string()];
+                old.extend(g.fixups.iter().map(|o| o.to_string()));
+                ShaMapping {
+                    old,
+                    new: map2.get(new_oid).copied().unwrap_or(*new_oid).to_string(),
+                }
+            })
+            .collect::<Vec<_>>();
+        Self::finalize_preview(repo_ref, repo, base, h2, mapping, plan, ctx)
+    }
+
+    /// Tail partagé : re-signature optionnelle (B1) puis écriture de la préview et
+    /// passage du plan en DryRunOk (efface l'éventuel état de conflit).
+    fn finalize_preview(
+        repo_ref: &RepoRef,
+        repo: &Repository,
+        base: Oid,
+        structure_tip: Oid,
+        mapping: Vec<ShaMapping>,
+        plan: &mut Plan,
+        ctx: &TaskCtx,
+    ) -> Result<()> {
+        // B1 : re-signature optionnelle des commits réécrits. La réécriture produit
+        // des commits NON signés (git2 ne signe pas, et le sequencer désactive la
+        // signature) ; si la gouvernance l'exige ET qu'une clé est configurée dans
+        // le dépôt, on recrée le segment signé. Sans clé : no-op.
         let (final_tip, mapping) = if repo_ref.governance.resign_after_rewrite {
             match sign::signer_from_config(repo)? {
                 Some(signer) => {
                     ctx.step("re-signature des commits", 0, None)?;
                     let (signed_tip, sign_map) =
-                        sign::sign_segment(repo, base, final_tip, &signer)?;
+                        sign::sign_segment(repo, base, structure_tip, &signer)?;
                     let mapping = mapping
                         .into_iter()
                         .map(|mut m| {
@@ -560,10 +629,10 @@ impl PlanEngine {
                         .collect::<Vec<_>>();
                     (signed_tip, mapping)
                 }
-                None => (final_tip, mapping),
+                None => (structure_tip, mapping),
             }
         } else {
-            (final_tip, mapping)
+            (structure_tip, mapping)
         };
 
         ctx.step("contrôle des invariants et écriture de la préview", 0, None)?;
@@ -575,7 +644,41 @@ impl PlanEngine {
         plan.dry_run_hash = Some(plan_hash(&plan.fingerprint, &plan.ops));
         plan.status = PlanStatus::DryRunOk;
         plan.error = None;
+        plan.conflict = None;
         Ok(())
+    }
+
+    /// Reprend un dry-run LINÉAIRE mis en pause sur conflit (C1) : les fichiers ont
+    /// été résolus et stagés via `rewrite::conflict_resolve`. Poursuit le rejeu ;
+    /// s'il se termine, réécrit les messages et écrit la préview ; s'il rencontre
+    /// un nouveau conflit, remet le plan en pause.
+    pub fn dry_run_continue(
+        repo_ref: &RepoRef,
+        repo: &Repository,
+        plan: &mut Plan,
+        session_dir: &std::path::Path,
+        ctx: &TaskCtx,
+    ) -> Result<()> {
+        Self::ensure_not_protected(repo_ref, &plan.fingerprint.branch)?;
+        let (base, tip) = Self::check_fingerprint(repo, plan)?;
+        let segment = GitEngine::segment(repo, Some(base), tip)?;
+        let compiled = compile(&segment, &plan.ops)?;
+        match rewrite::sequencer_continue(repo, session_dir, &ctx.cancel)? {
+            rewrite::RebaseStep::Done(h1) => Self::finish_linear_structure(
+                repo_ref, repo, base, tip, h1, &compiled, true, plan, ctx,
+            ),
+            rewrite::RebaseStep::Conflict(files) => {
+                plan.status = PlanStatus::Conflict;
+                plan.conflict = Some(ConflictInfo {
+                    files: files
+                        .into_iter()
+                        .map(|(path, content)| ConflictFile { path, content })
+                        .collect(),
+                });
+                plan.error = None;
+                Ok(())
+            }
+        }
     }
 
     /// Applique un plan : exige un dry-run réussi du MÊME plan, crée le backup
