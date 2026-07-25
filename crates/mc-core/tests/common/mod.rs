@@ -202,6 +202,60 @@ pub fn merge_fixture() -> (Fixture, (Oid, Oid, Oid, Oid)) {
     (f, (c, d, e, m))
 }
 
+/// Dépôt avec une mainline à DEUX commits contigus (d1, d2) et une branche side
+/// (E) fusionnée en M : mainline A→C→d1→d2, side C→E, M = merge(d2, E).
+/// Segment base(A)..M = {C, E, d1, d2, M}. Retourne (d1, d2, m). Sert aux tests
+/// de STRUCTURE à travers un merge (T10 complet).
+pub fn merge_mainline_fixture() -> (Fixture, (Oid, Oid, Oid)) {
+    let f = init_repo();
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n")],
+        "chore: init",
+        1_700_000_000,
+    );
+    checkout_new_branch(&f.repo, "feature/merge");
+    let c = commit(
+        &f.repo,
+        &[("src/c.rs", "// c\n")],
+        "feat: base",
+        1_700_000_100,
+    );
+    {
+        let cc = f.repo.find_commit(c).unwrap();
+        f.repo.branch("side", &cc, false).unwrap();
+    }
+    checkout_existing(&f.repo, "side");
+    commit(
+        &f.repo,
+        &[("src/e.rs", "// e\n")],
+        "feat: side work",
+        1_700_000_200,
+    );
+    checkout_existing(&f.repo, "feature/merge");
+    let d1 = commit(
+        &f.repo,
+        &[("src/d.rs", "// d1\n")],
+        "wip: d part 1",
+        1_700_000_300,
+    );
+    let d2 = commit(
+        &f.repo,
+        &[("src/d.rs", "// d1\n// d2\n")],
+        "wip: d part 2",
+        1_700_000_400,
+    );
+    let e_tip = f.repo.refname_to_id("refs/heads/side").unwrap();
+    let m = merge_commit(
+        &f.repo,
+        &[d2, e_tip],
+        &[("src/d.rs", "// d1\n// d2\n"), ("src/e.rs", "// e\n")],
+        "merge: integrate side work",
+        1_700_000_500,
+    );
+    (f, (d1, d2, m))
+}
+
 pub fn core_with(f: &Fixture) -> (mc_core::Core, String) {
     std::env::set_var("MC_SECRETS_MODE", "memory");
     let core = mc_core::Core::in_memory(skills_dir()).unwrap();
