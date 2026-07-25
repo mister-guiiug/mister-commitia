@@ -7,15 +7,15 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 | # | Proposition | Effort | Notes |
 |---|---|---|---|
 | F1 | ✅ **Vue graphe Git réelle** (lanes SVG, merges visibles) à côté de la vue liste | M | **Livré (lot 4)** : lanes calculées par le cœur (`graph::build_graph`, pure & testée), bascule Liste/Graphe, SVG (nœuds, arêtes courbes, merges, bornes hors-segment) |
-| F2 | **Réordonnancement par glisser-déposer** dans le composeur de plan | M | L'opération `reorder` existe et est testée côté cœur mais **n'est pas exposée dans l'UI** ; idem `fixup` |
-| F3 | **Diff de contenu par commit** (viewer unifié, tronqué au-delà d'un seuil) | M | Aujourd'hui : stats seulement ; nécessite une commande IPC `commit_diff(sha)` |
+| F2 | ✅ **Réordonnancement par glisser-déposer** dans le composeur de plan | M | **Livré (lot 2)** : DnD + boutons clavier → opération `reorder` du plan |
+| F3 | ✅ **Diff de contenu par commit** (viewer unifié, tronqué au-delà d'un seuil) | M | **Livré (lot 2)** : `commit_diff(sha)` + visionneuse colorée (tronquée à 200 Ko) |
 | F4 | ✅ **Push assisté post-application** : `--force-with-lease` guidé, checklist de coordination, détection des PR ouvertes via l'API | M | **Livré (lot 4)** : `push_preview`/`push_execute` (bail explicite, garde-fous protégée+confirmation typée, audit avant/après), PR ouvertes via GitHub, panneau UI avec checklist |
-| F5 | **Import de plan dans l'UI** | S | `plan_import` existe (cœur + commande IPC) sans bouton ; le pendant de l'export |
+| F5 | ✅ **Import de plan dans l'UI** | S | **Livré (lot 1)** : bouton d'import câblé sur `plan_import` |
 | F6 | **Choix de la base du segment** (autre branche/сommit que le merge-base auto) | S | Utile pour branches empilées |
 | F7 | **Nettoyage CI en masse** : exécution par lot du rapport de simulation avec throttling adaptatif, reprise sur checkpoint, puis logs/artifacts GitHub | L | Backlog V2-CI-1/4 ; le cœur gère déjà 429/Retry-After à l'unité |
-| F8 | **Éditeur de skills intégré** : édition YAML avec validation JSON-Schema live, exécution des self-tests, diff avant/après publication | M | La page Skills est en lecture seule ; le runner existe |
-| F9 | **Rapport HTML exportable** d'un plan (avant/après, risques, mapping) pour revue d'équipe hors outil | S | Simple templating depuis `plan.json` |
-| F10 | **Onboarding premier lancement** : déclarer un dépôt, choisir IA locale/distante, expliquer les garde-fous | S | Réduit la marche d'entrée |
+| F8 | ✅ **Éditeur de skills intégré** : édition YAML, validation à l'enregistrement, self-tests | M | **Livré (lot 2)** : édition du manifeste (`name` immuable, anti-traversée), éditions journalisées |
+| F9 | ✅ **Rapport HTML exportable** d'un plan (avant/après, risques, mapping) pour revue d'équipe hors outil | S | **Livré (lot 2)** : export HTML autonome depuis le plan |
+| F10 | ✅ **Onboarding premier lancement** : déclarer un dépôt, choisir IA locale/distante, expliquer les garde-fous | S | **Livré (lot 2)** : accueil 3 étapes (localStorage) |
 | F11 | ✅ i18n FR/EN | M | **Livré partiel (lot 5)** : scaffold `t()` + dictionnaire FR/EN, langue persistée, bascule ; câblé sur le shell (en-tête, nav, onboarding). Corps de page : externalisation à poursuivre |
 | F12 | Négociation `api-version` Azure DevOps Server (7.1 → 7.0) effective + test on-prem | S | Le connecteur envoie 7.1 fixe |
 
@@ -23,18 +23,18 @@ Statut : **[Recommandé]** — propositions issues du développement du MVP (202
 
 | # | Proposition | Effort | Notes |
 |---|---|---|---|
-| T1 | **Erreurs IPC typées** `{code, message}` au lieu de chaînes | S | Point faible actuel : l'UI détecte `message.includes("consentement")` pour ouvrir le dialogue — fragile et lié à la langue ; codes attendus : `consent_required`, `confirm_required`, `rate_limited{retry}`, `refused`… |
-| T2 | **Progression + annulation** des opérations longues (dry-run, inventaire) via events/channels Tauri + `spawn_blocking` pour ne pas occuper les workers | M | Aujourd'hui : spinner booléen, pas d'annulation |
-| T3 | **Migrations SQLite versionnées** (`schema_version`) | S | Le schéma v1 en `CREATE IF NOT EXISTS` ne permettra pas d'évoluer proprement |
-| T4 | **Journalisation structurée** (`tracing`) avec redaction branchée sur le subscriber + niveau debug activable dans l'UI | S | La redaction existe, les logs techniques non |
+| T1 | ✅ **Erreurs IPC typées** `{code, message, expected}` au lieu de chaînes | S | **Livré (lot 1)** : l'UI se branche sur `consent_required`/`confirm_required`/`rate_limited`/`refused`, jamais sur le texte |
+| T2 | ✅ **Progression + annulation** des opérations longues via events/channels Tauri + `spawn_blocking` | M | **Livré (lots 2 & 3)** : canal `mc://task`, annulation coopérative (`cancelled`), points de non-retour préservés |
+| T3 | ✅ **Migrations SQLite versionnées** (`schema_version`) | S | **Livré (lot 1)** : runner transactionnel `MIGRATIONS` |
+| T4 | ✅ **Journalisation structurée** (`tracing`) avec redaction branchée sur le subscriber, niveau via `MC_LOG` | S | **Livré (lot 2)** : writer fichier redacté avant écriture |
 | T5 | ✅ **CI qualité** : clippy + rustfmt (`--check`), `cargo-deny` (advisories), couverture `cargo-llvm-cov` avec gate ≥ 80 % sur plan-engine (DoD §9.2) | S | **Livré** (lots 1 & 6) : fmt/clippy/advisories + **job `couverture`** gate plan.rs ≥ 80 % (mesuré : **87,7 %** ; global mc-core 80,5 %) |
 | T6 | ✅ **Tests de propriétés** (proptest) sur `compile()` du plan : séquences d'opérations aléatoires → invariants (§15.4) | M | **Livré (lot 5)** : 400 cas — jamais de panic, invariants leaders/commits/reword-only |
 | T7 | ✅ **E2E desktop** via tauri-driver/WebDriver sur le runner Windows | L | **Livré (lot 5)** : E2E Playwright (web/mock, job CI à chaque push) + harnais natif tauri-driver (`e2e-native/`, job `workflow_dispatch` expérimental) |
 | T8 | **Signature des binaires** (Azure Trusted Signing ou certificat OV) + `tauri-plugin-updater` signé | M | Bundles actuellement non signés → SmartScreen ; prérequis à une distribution large |
 | T9 | Durcir la **CSP** (supprimer `unsafe-inline` styles) et ajouter un audit `cargo auditable`/SBOM | S | Aligné avec la pratique mister-doc (CSP hash) |
 | T10 | ✅ **Merges dans le segment** (partiel) : rapport de conflits par fichier | L | **Livré partiel (lot 5)** : `reword_dag` réécrit les MESSAGES à travers un merge (topologie/arbres préservés) ; le sequencer liste les fichiers en conflit. Changements de structure à travers un merge : toujours refusés (sûreté). `--rebase-merges` complet : reporté |
-| T11 | **Streaming des réponses IA** + retry/backoff + budget de tokens par lot | M | UX d'attente sur groupes nombreux |
-| T12 | Script `scripts/dev-env.ps1` qui configure la toolchain windows-gnu locale (PATH/CC/AR, recette documentée) | S | Pour contributeurs sans MSVC ; la recette existe en mémoire de session, pas dans le dépôt |
+| T11 | ✅ **Streaming des réponses IA** + retry/backoff + budget de tokens par lot | M | **Livré (lot 3)** : SSE/NDJSON relayés en direct, backoff plafonné `Retry-After`, budget 256..1024/groupe |
+| T12 | ✅ Script `scripts/dev-env.ps1` qui configure la toolchain windows-gnu locale (PATH/CC/AR, recette documentée) | S | **Livré (lot 1)** : recette versionnée (BOM UTF-8 + PATH `dlltool-only`) |
 | T13 | ✅ Cache d'analyse incrémental par SHA + virtualisation des longues listes | M | **Livré (lot 5)** : cache `CommitInfo` par SHA (`on_remote` recalculé hors cache) ; virtualisation de la vue graphe au-delà de 150 commits |
 
 ## 16.3 Harmonisation UX/UI
@@ -43,16 +43,16 @@ Constats sur l'UI MVP (volontairement spartiate) et remèdes :
 
 | # | Proposition | Effort | Constat actuel |
 |---|---|---|---|
-| U1 | **Design tokens centralisés** : palette sémantique unique (teal=action, rose=destructif, amber=attention, sky=information, violet=IA), échelles d'espacement et de tailles d'icônes (14/16/20) | S | Classes Tailwind ad hoc répétées ; tailles d'icônes 13→16 au hasard |
+| U1 | ✅ **Design tokens centralisés** : palette sémantique (teal=action, rose=destructif, amber=attention, sky=information, violet=IA), échelles d'icônes | S | **Livré (lot 1)** : tokens dans `ui.tsx` (ICON_SM/MD, badgeTones, classes partagées) |
 | U2 | ✅ **Mode clair + bascule persistée** | M | **Livré (lot 5)** : thème sombre/clair/système persisté ; le clair inverse l'échelle `slate` via les variables CSS de Tailwind 4 (tout le chrome bascule) |
-| U3 | **Modal unique accessible** (focus-trap, Échap, aria) réutilisé partout | S | Deux modals maison divergents (consentement IA, suppression CI) ; pattern `ConfirmProvider/useConfirm` déjà éprouvé sur mister-doc |
-| U4 | **Composant « confirmation par saisie du nom »** unifié | S | Deux implémentations différentes (input inline pour la branche partagée, modal pour le run CI) pour le même concept de sécurité |
-| U5 | **Toasts non bloquants** (succès/erreur) + états de chargement homogènes (boutons `loading`, skeletons) | S | Les succès sont silencieux ; `busy` booléen unique par page |
-| U6 | **En-tête global contextuel** : repo/branche sélectionnés visibles partout, sélection de dépôt depuis la barre latérale | M | Le contexte est répété ou absent selon la page ; l'état des pages se perd au changement d'onglet (montage/démontage) → conserver l'état par page |
+| U3 | ✅ **Modal unique accessible** (focus-trap, Échap, aria) réutilisé partout | S | **Livré (lot 1)** : `Modal` (role dialog, aria-modal, piège de focus) |
+| U4 | ✅ **Composant « confirmation par saisie du nom »** unifié | S | **Livré (lot 1)** : `ConfirmTyped` piloté par le cœur (`confirm_required`) |
+| U5 | ✅ **Toasts non bloquants** (succès/erreur) + états de chargement homogènes (boutons `loading`) | S | **Livré (lot 1)** : `ToastProvider` aria-live + boutons `loading` |
+| U6 | ✅ **En-tête global contextuel** : repo/branche visibles partout, état des pages conservé | M | **Livré (lot 2)** : en-tête global + pages montées en permanence (état conservé entre onglets) |
 | U7 | ✅ **Tables harmonisées** : hover, tri, SHA en `font-mono` partout, troncature avec infobulle | S | **Livré** (lots 1 & 6) : classes partagées, hover, SHA mono ; **tri clic-colonne** sur candidats CI **et Journal** |
-| U8 | **Échelle de verdicts unique** ok/attention/bloquant réutilisée par le panneau risques ET le rapport CI (protégés = même sémantique ambre) avec légende commune | S | Deux vocabulaifes visuels pour la même idée |
-| U9 | **Accessibilité** : aria-labels sur les cases de sélection de commits, focus visible, contraste des textes `slate-500` relevé, navigation clavier des listes, `prefers-reduced-motion` | M | Aucun aria sur les checkboxes ; contrastes limites |
-| U10 | **États vides actionnables** : chaque Empty propose l'action suivante (ex. page CI vide → « Ajouter un accès ») ; erreurs réseau avec « Réessayer » | S | Empty informatifs sans action |
+| U8 | ✅ **Échelle de verdicts unique** ok/attention/bloquant (panneau risques ET rapport CI) avec légende commune | S | **Livré (lot 1)** : `VerdictBadge` + `VerdictLegend` partagés |
+| U9 | ✅ **Accessibilité** : aria-labels sur les cases de commits, focus visible, navigation clavier, `prefers-reduced-motion` | M | **Livré (lot 2)** : focus-visible, aria-labels/aria-current, mouvement réduit respecté |
+| U10 | ✅ **États vides actionnables** : chaque `Empty` propose l'action suivante | S | **Livré (lot 1)** : `Empty` avec `actionLabel`/`onAction` |
 | U11 | ✅ **Lexique FR harmonisé** : capitalisation des boutons, espaces insécables avant « : » et « ? » | S | **Livré** (lots 1 & 6) : libellés principaux + passe sur les écrans secondaires ; plus aucune violation d'espace insécable dans le texte visible |
 | U12 | **Raccourcis clavier** (actualiser, dry-run, naviguer entre onglets) + affichage `?` | M | Aucun raccourci |
 
