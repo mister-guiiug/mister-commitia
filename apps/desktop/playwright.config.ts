@@ -13,6 +13,9 @@ export default defineConfig({
   use: {
     baseURL: "http://localhost:4173",
     trace: "on-first-retry",
+    // Déterminisme : neutralise les animations/transitions (l'app honore déjà
+    // `prefers-reduced-motion`) — évite les échecs « element not stable » en CI.
+    reducedMotion: "reduce",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

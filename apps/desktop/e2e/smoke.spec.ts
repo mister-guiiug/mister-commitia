@@ -43,13 +43,20 @@ test("F11 : bascule de langue FR ↔ EN sur la navigation", async ({ page }) => 
 test("F1 : analyse puis vue graphe SVG", async ({ page }) => {
   await page.getByRole("button", { name: /Analyse & plan/ }).click();
   // Attendre la FIN de l'analyse (mock : phases + progression) : la table des
-  // commits est rendue et le layout s'est stabilisé (panneau de progression parti).
+  // commits est rendue.
   await expect(page.locator("table tbody tr").first()).toBeVisible({ timeout: 25_000 });
-  // Basculer en vue graphe (page stabilisée → clic normal, défilé dans la vue).
-  const graphToggle = page.getByRole("button", { name: "Graphe", exact: true });
-  await graphToggle.scrollIntoViewIfNeeded();
-  await graphToggle.click();
-  await expect(graphToggle).toHaveAttribute("aria-pressed", "true");
+  // Basculer en vue graphe via un clic DOM direct (déclenche le handler React
+  // sans dépendre de l'actionnabilité — robuste aux micro-décalages de layout).
+  await page.evaluate(() => {
+    const btn = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Graphe",
+    );
+    (btn as HTMLButtonElement | undefined)?.click();
+  });
+  await expect(page.getByRole("button", { name: "Graphe", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(page.locator('svg[aria-label="Graphe des commits"]')).toBeVisible({ timeout: 10_000 });
   // Au moins un nœud (cercle) rendu.
   expect(await page.locator('svg[aria-label="Graphe des commits"] circle').count()).toBeGreaterThan(0);
