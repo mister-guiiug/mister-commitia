@@ -231,7 +231,8 @@ async fn plan_conflict_continue(
     let ctx = task_ctx(&app, &tasks, "plan_conflict_continue", &task_id);
     let core = core.inner().clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
-        core.plan_conflict_continue_with(&plan_id, &ctx).map_err(err)
+        core.plan_conflict_continue_with(&plan_id, &ctx)
+            .map_err(err)
     })
     .await
     .map_err(join_err);
