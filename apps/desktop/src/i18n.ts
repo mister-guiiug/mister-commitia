@@ -382,6 +382,214 @@ const STRINGS: Record<string, Entry> = {
     fr: "Découpe préparée — dry-run construit, vérifier puis appliquer",
     en: "Split prepared — dry-run built, review then apply",
   },
+
+  // Analyse — toasts (interpolation via {marqueur}), erreurs, infobulles, modales.
+  "an.tt.scanCancelled": {
+    fr: "Analyse annulée — aucun effet de bord",
+    en: "Analysis cancelled — no side effects",
+  },
+  "an.tt.genCancelled": {
+    fr: "Génération annulée — les propositions déjà produites sont conservées",
+    en: "Generation cancelled — proposals already produced are kept",
+  },
+  "an.err.noOps": {
+    fr: "Aucune opération : accepter des propositions ou marquer des abandons d'abord.",
+    en: "No operation: accept proposals or mark drops first.",
+  },
+  "an.tt.composed": {
+    fr: "Plan composé ({n} opération(s)) — dry-run requis avant application",
+    en: "Plan composed ({n} operation(s)) — dry-run required before applying",
+  },
+  "an.tt.dryRunOk": {
+    fr: "Dry-run réussi — résultat réel construit dans la préview, branche intacte",
+    en: "Dry-run succeeded — real result built in the preview, branch untouched",
+  },
+  "an.tt.dryRunCancelled": {
+    fr: "Dry-run annulé — branche et préview intactes",
+    en: "Dry-run cancelled — branch and preview untouched",
+  },
+  "an.tt.continueCancelled": { fr: "Reprise annulée", en: "Continue cancelled" },
+  "an.tt.applied": {
+    fr: "Plan appliqué — backup {backup}",
+    en: "Plan applied — backup {backup}",
+  },
+  "an.tt.applyCancelled": {
+    fr: "Application annulée avant le backup — rien n'a été écrit",
+    en: "Apply cancelled before backup — nothing was written",
+  },
+  "an.tt.rolledBack": {
+    fr: "Branche restaurée depuis le backup",
+    en: "Branch restored from backup",
+  },
+  "an.tt.exported": {
+    fr: "Plan exporté (JSON reproductible)",
+    en: "Plan exported (reproducible JSON)",
+  },
+  "an.tt.htmlExported": { fr: "Rapport HTML exporté", en: "HTML report exported" },
+  "an.tt.imported": {
+    fr: "Plan importé — statut brouillon, dry-run requis",
+    en: "Plan imported — draft status, dry-run required",
+  },
+  "an.ti.base": {
+    fr: "Forcer la base du segment (branche, tag ou SHA) — utile pour les branches empilées",
+    en: "Force the segment base (branch, tag or SHA) — useful for stacked branches",
+  },
+  "an.ti.diff": { fr: "Voir le diff de ce commit", en: "View this commit's diff" },
+  "an.ti.export": {
+    fr: "Exporter le plan reproductible (JSON)",
+    en: "Export the reproducible plan (JSON)",
+  },
+  "an.ti.htmlExport": {
+    fr: "Exporter le rapport HTML (revue d'équipe)",
+    en: "Export the HTML report (team review)",
+  },
+  "an.ti.import": { fr: "Importer un plan (JSON)", en: "Import a plan (JSON)" },
+  "an.md.consentTitle": {
+    fr: "Consentement — envoi à un fournisseur IA distant",
+    en: "Consent — sending to a remote AI provider",
+  },
+  "an.md.pushTitle": { fr: "Pousser vers le remote", en: "Push to the remote" },
+  "an.md.applyTitle": {
+    fr: "Application sur branche partagée",
+    en: "Applying to a shared branch",
+  },
+
+  // CI/CD — toasts (interpolation via {marqueur}) et erreurs.
+  "ci.tt.access": {
+    fr: "Accès validé — {msg}. Token envoyé au coffre du système.",
+    en: "Access validated — {msg}. Token sent to the system vault.",
+  },
+  "ci.tt.inventoried": { fr: "{n} runs inventoriés", en: "{n} runs inventoried" },
+  "ci.tt.inventoryCancelled": { fr: "Inventaire annulé", en: "Inventory cancelled" },
+  "ci.tt.policySaved": {
+    fr: "Politique « {name} » enregistrée",
+    en: "Policy “{name}” saved",
+  },
+  "ci.tt.simDone": {
+    fr: "Simulation terminée — {cand} candidat(s), {prot} protégé(s), aucune suppression émise",
+    en: "Simulation done — {cand} candidate(s), {prot} protected, no deletion issued",
+  },
+  "ci.tt.simCancelled": {
+    fr: "Simulation annulée — aucun rapport produit, aucune suppression émise",
+    en: "Simulation cancelled — no report produced, no deletion issued",
+  },
+  "ci.tt.runDeleted": {
+    fr: "Run {id} supprimé — action journalisée",
+    en: "Run {id} deleted — action logged",
+  },
+  "ci.tt.batchCancelled": {
+    fr: "Suppression en masse annulée",
+    en: "Bulk deletion cancelled",
+  },
+  "ci.err.nothingToPurge": {
+    fr: "Rien à purger : activer les logs et/ou les artefacts.",
+    en: "Nothing to purge: enable logs and/or artifacts.",
+  },
+  "ci.tt.purgeCancelled": { fr: "Purge annulée", en: "Purge cancelled" },
+  "ci.tt.failSuffix": { fr: ", {f} échec(s)", en: ", {f} failure(s)" },
+  "ci.tt.batchInterrupted": {
+    fr: "Interrompu : {n} supprimé(s), reprise possible",
+    en: "Interrupted: {n} deleted, resumable",
+  },
+  "ci.tt.batchDeleted": {
+    fr: "{n} run(s) supprimé(s){fail} — journalisé",
+    en: "{n} run(s) deleted{fail} — logged",
+  },
+  "ci.tt.purgeInterrupted": {
+    fr: "Purge interrompue : {a} artefact(s), {l} log(s)",
+    en: "Purge interrupted: {a} artifact(s), {l} log(s)",
+  },
+  "ci.tt.purgeDone": {
+    fr: "{a} artefact(s) + {l} log(s) purgés sur {runs} run(s){fail} — runs conservés, journalisé",
+    en: "{a} artifact(s) + {l} log(s) purged over {runs} run(s){fail} — runs kept, logged",
+  },
+
+  // Analyse — propositions, push, aria-labels, erreurs de sélection.
+  "an.err.selectTwo": {
+    fr: "Sélectionner au moins deux commits pour une synthèse.",
+    en: "Select at least two commits for a synthesis.",
+  },
+  "an.err.selectOne": {
+    fr: "Sélectionner au moins un commit.",
+    en: "Select at least one commit.",
+  },
+  "an.tt.propRefused": {
+    fr: "{n} proposition(s), dont {refused} refus de gouvernance",
+    en: "{n} proposal(s), of which {refused} governance refusal(s)",
+  },
+  "an.tt.propGenerated": {
+    fr: "{n} proposition(s) générée(s) — à vous de décider",
+    en: "{n} proposal(s) generated — your call",
+  },
+  "an.tt.pushForced": {
+    fr: "Push forcé effectué (force-with-lease) — historique distant réécrit",
+    en: "Forced push done (force-with-lease) — remote history rewritten",
+  },
+  "an.tt.pushed": { fr: "Commits poussés vers le remote", en: "Commits pushed to the remote" },
+  "an.aria.base": {
+    fr: "Base du segment : branche, tag ou SHA (F6)",
+    en: "Segment base: branch, tag or SHA (F6)",
+  },
+  "an.aria.selectCommit": {
+    fr: "Sélectionner le commit {short} — {subject}",
+    en: "Select commit {short} — {subject}",
+  },
+  "an.aria.propMsg": { fr: "Message proposé (éditable)", en: "Proposed message (editable)" },
+  "an.aria.import": { fr: "Importer un plan JSON", en: "Import a JSON plan" },
+  "an.aria.confirmPush": {
+    fr: "Saisir {branch} pour confirmer le push forcé",
+    en: "Type {branch} to confirm the forced push",
+  },
+  "an.prop.risk": { fr: "risque {risk}", en: "risk {risk}" },
+  "an.prop.st.proposed": { fr: "à décider", en: "to decide" },
+  "an.prop.st.accepted": { fr: "acceptée", en: "accepted" },
+  "an.prop.st.edited": { fr: "éditée", en: "edited" },
+  "an.prop.st.refused": { fr: "refus de la skill", en: "skill refusal" },
+  "an.prop.st.rejected": { fr: "rejetée", en: "rejected" },
+  "an.prop.before": { fr: "Avant", en: "Before" },
+  "an.prop.afterLabel": { fr: "Après (proposé)", en: "After (proposed)" },
+  "an.prop.refusedLabel": { fr: "Refus motivé", en: "Refusal reason" },
+  "an.prop.validate": { fr: "Valider l'édition", en: "Confirm edit" },
+  "an.prop.accept": { fr: "Accepter", en: "Accept" },
+  "an.prop.reject": { fr: "Rejeter", en: "Reject" },
+  "an.cf.ariaResolve": { fr: "Résolution de {path}", en: "Resolution of {path}" },
+  "an.push.forceLabel": {
+    fr: "Réécrire le remote (force-with-lease)",
+    en: "Rewrite the remote (force-with-lease)",
+  },
+  "an.push.pushLabel": { fr: "Pousser", en: "Push" },
+
+  // Analyse — rapport HTML exporté (revue d'équipe hors outil).
+  "an.rep.h1": {
+    fr: "Plan de réécriture — {repo} · {branch}",
+    en: "Rewrite plan — {repo} · {branch}",
+  },
+  "an.rep.status": {
+    fr: "Statut : <b>{status}</b> · généré le {date} · plan <code>{id}</code>",
+    en: "Status: <b>{status}</b> · generated on {date} · plan <code>{id}</code>",
+  },
+  "an.rep.ops": { fr: "Opérations ({n})", en: "Operations ({n})" },
+  "an.rep.thNum": { fr: "#", en: "#" },
+  "an.rep.thOp": { fr: "Opération", en: "Operation" },
+  "an.rep.thTargets": { fr: "Cible(s)", en: "Target(s)" },
+  "an.rep.thDetail": { fr: "Détail", en: "Detail" },
+  "an.rep.thRisk": { fr: "Risque", en: "Risk" },
+  "an.rep.risks": { fr: "Risques", en: "Risks" },
+  "an.rep.beforeAfter": {
+    fr: "Avant / après (dry-run réel — {ref})",
+    en: "Before / after (real dry-run — {ref})",
+  },
+  "an.rep.thOld": { fr: "Anciens SHA", en: "Old SHAs" },
+  "an.rep.thNew": { fr: "Nouveau", en: "New" },
+  "an.rep.thSubjects": { fr: "Sujets", en: "Subjects" },
+  "an.rep.backup": {
+    fr: "Backup : <code>{ref}</code> · tag <code>{tag}</code>",
+    en: "Backup: <code>{ref}</code> · tag <code>{tag}</code>",
+  },
+  "an.rep.footer": {
+    fr: "Généré par mister-commitia — garde-fous : dry-run obligatoire, backup automatique, branches protégées bloquées, journal d'audit local.",
+    en: "Generated by mister-commitia — guardrails: mandatory dry-run, automatic backup, protected branches blocked, local audit log.",
+  },
 };
 
 let current: Lang = (localStorage.getItem(KEY) as Lang) || "fr";
@@ -397,9 +605,18 @@ export function setLang(l: Lang): void {
   listeners.forEach((f) => f());
 }
 
-export function t(key: string): string {
+/// Traduit `key` dans la langue courante. `params` substitue les marqueurs
+/// `{nom}` (interpolation des toasts et libellés dynamiques). Clé inconnue → clé
+/// renvoyée telle quelle (repérable en dev).
+export function t(key: string, params?: Record<string, string | number>): string {
   const e = STRINGS[key];
-  return e ? e[current] : key;
+  let s = e ? e[current] : key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      s = s.split(`{${k}}`).join(String(v));
+    }
+  }
+  return s;
 }
 
 /// Abonne un composant aux changements de langue et retourne la langue courante.
