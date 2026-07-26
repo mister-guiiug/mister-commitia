@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
 use crate::gitx::rewrite::{self, TodoGroup};
-use crate::gitx::{sign, GitEngine};
+use crate::gitx::{sign, split, GitEngine};
 use crate::model::*;
 use crate::task::TaskCtx;
 
@@ -216,6 +216,13 @@ fn compile(segment: &[Oid], ops: &[PlanOp]) -> Result<Compiled> {
                     structure_changed = true;
                 }
             }
+            Operation::Split { .. } => {
+                // La découpe (C3) est EXCLUSIVE et suit un chemin dédié
+                // (`dry_run_split`) : elle ne doit jamais atteindre le compilateur.
+                return Err(CoreError::Invalid(
+                    "la découpe (split) doit être la seule opération du plan".into(),
+                ));
+            }
         }
     }
 
@@ -336,6 +343,23 @@ impl PlanEngine {
         ctx.step("vérification de l'empreinte", 0, None)?;
         let (base, tip) = Self::check_fingerprint(repo, plan)?;
         let segment = GitEngine::segment(repo, Some(base), tip)?;
+
+        // C3 : la DÉCOUPE est une opération EXCLUSIVE, sur chemin dédié (elle ne
+        // s'exprime pas dans la todo pick/fixup du sequencer). Détectée en amont.
+        if let Some((target, parts)) = plan.ops.iter().find_map(|o| match &o.op {
+            Operation::Split { target, parts } => Some((target.clone(), parts.clone())),
+            _ => None,
+        }) {
+            if plan.ops.len() != 1 {
+                return Err(CoreError::Refused(
+                    "la découpe (split) doit être la seule opération du plan".into(),
+                ));
+            }
+            return Self::dry_run_split(
+                repo_ref, repo, plan, base, tip, &segment, &target, &parts, ctx,
+            );
+        }
+
         // T10 complet : un segment contenant un merge accepte les changements de
         // STRUCTURE (squash/fixup/drop de commits non-merge) via `--rebase-merges`,
         // git préservant la topologie. Restent refusés : le réordonnancement
@@ -376,6 +400,8 @@ impl PlanEngine {
                         targets.iter().collect()
                     }
                     Operation::Reorder { .. } => vec![],
+                    // Inatteignable ici : une découpe part sur son chemin dédié en amont.
+                    Operation::Split { target, .. } => vec![target],
                 };
                 for t in targets {
                     if let Ok(oid) = resolve(&segment, t) {
@@ -679,6 +705,124 @@ impl PlanEngine {
                 Ok(())
             }
         }
+    }
+
+    /// C3 — dry-run d'une DÉCOUPE : valide la partition des fichiers puis
+    /// reconstruit le segment (chemin dédié, sans sequencer) et écrit la préview.
+    #[allow(clippy::too_many_arguments)]
+    fn dry_run_split(
+        repo_ref: &RepoRef,
+        repo: &Repository,
+        plan: &mut Plan,
+        base: Oid,
+        tip: Oid,
+        segment: &[Oid],
+        target_ref: &str,
+        parts: &[SplitPart],
+        ctx: &TaskCtx,
+    ) -> Result<()> {
+        ctx.step("découpe : validation", 0, None)?;
+        // Segment LINÉAIRE uniquement (V1).
+        for o in segment {
+            if repo.find_commit(*o)?.parent_count() > 1 {
+                return Err(CoreError::Refused(
+                    "la découpe n'est pas supportée sur un segment contenant un merge".into(),
+                ));
+            }
+        }
+        let target = resolve(segment, target_ref)?;
+        let target_commit = repo.find_commit(target)?;
+        if target_commit.parent_count() != 1 {
+            return Err(CoreError::Refused(
+                "seul un commit à parent unique peut être découpé".into(),
+            ));
+        }
+        if parts.len() < 2 {
+            return Err(CoreError::Invalid(
+                "une découpe doit produire au moins 2 commits".into(),
+            ));
+        }
+        for p in parts {
+            if p.message.trim().is_empty() {
+                return Err(CoreError::Invalid(
+                    "chaque part d'une découpe doit porter un message".into(),
+                ));
+            }
+            if p.files.is_empty() {
+                return Err(CoreError::Invalid(
+                    "chaque part d'une découpe doit contenir au moins un fichier".into(),
+                ));
+            }
+        }
+        // Partition EXACTE des fichiers modifiés par la cible.
+        let changed = split::changed_files(repo, &target_commit)?;
+        let changed_set: std::collections::HashSet<&String> = changed.iter().collect();
+        let mut assigned: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for p in parts {
+            for f in &p.files {
+                if !changed_set.contains(f) {
+                    return Err(CoreError::Invalid(format!(
+                        "le fichier « {f} » n'est pas modifié par le commit à découper"
+                    )));
+                }
+                if !assigned.insert(f.clone()) {
+                    return Err(CoreError::Invalid(format!(
+                        "le fichier « {f} » est affecté à plusieurs parts"
+                    )));
+                }
+            }
+        }
+        if assigned.len() != changed.len() {
+            let missing: Vec<&String> = changed.iter().filter(|f| !assigned.contains(*f)).collect();
+            return Err(CoreError::Invalid(format!(
+                "découpe incomplète : {} fichier(s) modifié(s) non affecté(s) (ex. {:?})",
+                changed.len() - assigned.len(),
+                missing.iter().take(3).collect::<Vec<_>>()
+            )));
+        }
+        // Gouvernance : un trailer PROTÉGÉ de la cible doit survivre dans AU MOINS
+        // une part (une découpe ne doit pas perdre un Signed-off-by en silence).
+        let protected: Vec<(String, String)> =
+            GitEngine::parse_trailers(target_commit.message().unwrap_or(""))
+                .into_iter()
+                .filter(|(k, _)| {
+                    repo_ref
+                        .governance
+                        .protected_trailers
+                        .iter()
+                        .any(|p| p.eq_ignore_ascii_case(k))
+                })
+                .collect();
+        for (k, v) in &protected {
+            let present = parts.iter().any(|p| {
+                GitEngine::parse_trailers(&p.message)
+                    .iter()
+                    .any(|(pk, pv)| pk == k && pv == v)
+            });
+            if !present {
+                return Err(CoreError::Refused(format!(
+                    "trailer protégé « {k}: {v} » du commit découpé absent de toutes les parts : \
+                     l'ajouter au message de l'une d'elles"
+                )));
+            }
+        }
+
+        ctx.step("découpe : reconstruction du segment", 0, None)?;
+        let (new_tip, raw_mapping) = split::split_segment(repo, base, tip, target, parts)?;
+        // Invariant : une découpe ne perd RIEN — l'arbre final est identique.
+        if repo.find_commit(tip)?.tree_id() != repo.find_commit(new_tip)?.tree_id() {
+            return Err(CoreError::Git(
+                "invariant violé : la découpe a modifié l'arbre final".into(),
+            ));
+        }
+        let mapping = raw_mapping
+            .into_iter()
+            .map(|(old, new)| ShaMapping {
+                old: old.iter().map(|o| o.to_string()).collect(),
+                new: new.to_string(),
+            })
+            .collect::<Vec<_>>();
+        Self::finalize_preview(repo_ref, repo, base, new_tip, mapping, plan, ctx)
     }
 
     /// Applique un plan : exige un dry-run réussi du MÊME plan, crée le backup

@@ -350,6 +350,38 @@ const STRINGS: Record<string, Entry> = {
     fr: "Résolution abandonnée — plan revenu en brouillon",
     en: "Resolution aborted — plan back to draft",
   },
+  "an.sp.split": { fr: "Découper ce commit", en: "Split this commit" },
+  "an.sp.title": { fr: "Découpe par fichier", en: "Split by file" },
+  "an.sp.help": {
+    fr: "Répartis les fichiers modifiés par ce commit en plusieurs parts (chacune deviendra un commit). Chaque fichier va dans exactement une part ; l'ordre des parts est celui des numéros. Le contenu final est identique — seul le découpage change.",
+    en: "Distribute the files this commit changes across several parts (each becomes a commit). Every file goes to exactly one part; part order follows the numbers. The final content is unchanged — only the slicing differs.",
+  },
+  "an.sp.parts": { fr: "Parts", en: "Parts" },
+  "an.sp.fewer": { fr: "Une part de moins", en: "One fewer part" },
+  "an.sp.more": { fr: "Une part de plus", en: "One more part" },
+  "an.sp.file": { fr: "Fichier", en: "File" },
+  "an.sp.assignTo": { fr: "Affecter à la part", en: "Assign to part" },
+  "an.sp.part": { fr: "Part", en: "Part" },
+  "an.sp.filesN": { fr: "fichier(s)", en: "file(s)" },
+  "an.sp.msgPlaceholder": {
+    fr: "Message de ce commit (Conventional Commits recommandé)",
+    en: "Message for this commit (Conventional Commits recommended)",
+  },
+  "an.sp.cancel": { fr: "Annuler", en: "Cancel" },
+  "an.sp.confirm": { fr: "Découper", en: "Split" },
+  "an.sp.needFiles": {
+    fr: "Ce commit ne modifie qu'un fichier : rien à découper.",
+    en: "This commit changes only one file: nothing to split.",
+  },
+  "an.sp.emptyPart": {
+    fr: "Chaque part doit contenir au moins un fichier.",
+    en: "Each part must contain at least one file.",
+  },
+  "an.sp.needMsg": { fr: "Chaque part doit avoir un message.", en: "Each part needs a message." },
+  "an.sp.done": {
+    fr: "Découpe préparée — dry-run construit, vérifier puis appliquer",
+    en: "Split prepared — dry-run built, review then apply",
+  },
 };
 
 let current: Lang = (localStorage.getItem(KEY) as Lang) || "fr";

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, CheckCircle2, Download, FileText, FlaskConical, GitBranch,
-  GitGraph as GitGraphIcon, List, Play, RotateCcw, ShieldCheck, Sparkles, Undo2, Upload,
-  UploadCloud, XCircle,
+  GitGraph as GitGraphIcon, List, Play, RotateCcw, Scissors, ShieldCheck, Sparkles, Undo2,
+  Upload, UploadCloud, XCircle,
 } from "lucide-react";
 import { asIpcError, call } from "../ipc";
 import type {
@@ -39,6 +39,10 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
   const [plan, setPlan] = useState<Plan | null>(null);
   // C1 — contenu édité (résolution) par fichier en conflit, pendant une pause de rejeu.
   const [conflictEdits, setConflictEdits] = useState<Record<string, string>>({});
+  // C3 — modale de découpe : commit ciblé, affectation fichier→part (index), messages.
+  const [splitFor, setSplitFor] = useState<CommitInfo | null>(null);
+  const [splitAssign, setSplitAssign] = useState<Record<string, number>>({});
+  const [splitMsgs, setSplitMsgs] = useState<string[]>([]);
   const [risks, setRisks] = useState<RiskAxis[]>([]);
   const [drops, setDrops] = useState<Set<string>>(new Set());
   const [consent, setConsent] = useState<{ preview: string; groups: string[][] } | null>(null);
@@ -337,6 +341,74 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     } catch (e) {
       setError(asIpcError(e).message);
     } finally {
+      setBusy(false);
+    }
+  };
+
+  // C3 — ouvre la modale de découpe pour un commit (≥ 2 fichiers requis).
+  const openSplit = (c: CommitInfo) => {
+    if (c.files.length < 2) {
+      toast("info", t("an.sp.needFiles"));
+      return;
+    }
+    const subj = c.subject.split("\n")[0];
+    setSplitFor(c);
+    setSplitAssign(Object.fromEntries(c.files.map((f) => [f, 0])));
+    setSplitMsgs([`${subj} (1)`, `${subj} (2)`]);
+  };
+
+  const setSplitPartCount = (n: number) => {
+    const count = Math.max(2, Math.min(n, splitFor?.files.length ?? 2));
+    setSplitMsgs((m) => {
+      const next = [...m];
+      while (next.length < count) next.push("");
+      return next.slice(0, count);
+    });
+    setSplitAssign((a) =>
+      Object.fromEntries(Object.entries(a).map(([f, p]) => [f, Math.min(p, count - 1)])),
+    );
+  };
+
+  // C3 — découpe exclusive : plan neuf ne portant QUE l'op split, puis dry-run.
+  const doSplit = async () => {
+    if (!splitFor) return;
+    const parts = splitMsgs.map((message, i) => ({
+      message: message.trim(),
+      files: splitFor.files.filter((f) => (splitAssign[f] ?? 0) === i),
+    }));
+    if (parts.some((p) => p.files.length === 0)) {
+      toast("error", t("an.sp.emptyPart"));
+      return;
+    }
+    if (parts.some((p) => !p.message)) {
+      toast("error", t("an.sp.needMsg"));
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    const taskId = task.begin("Découpe du commit");
+    try {
+      const p = await call<Plan>("plan_new", { repoId: repo.id, branch });
+      const splitOp: PlanOp = {
+        op: "split",
+        target: splitFor.sha,
+        parts,
+        seq: 1,
+        origin: "manuel",
+        risk: "high",
+        approved_by: "utilisateur",
+        approved_at: new Date().toISOString(),
+      };
+      await call<Plan>("plan_set_ops", { planId: p.id, ops: [splitOp] });
+      const dr = await call<Plan>("plan_dry_run", { planId: p.id, taskId });
+      setPlan(dr);
+      setRisks(await call<RiskAxis[]>("plan_risk", { planId: p.id }));
+      setSplitFor(null);
+      toast(dr.status === "dry_run_ok" ? "success" : "info", t("an.sp.done"));
+    } catch (e) {
+      setError(asIpcError(e).message);
+    } finally {
+      task.end();
       setBusy(false);
     }
   };
@@ -766,6 +838,15 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                       }
                     >
                       {drops.has(c.sha) ? t("an.keep") : t("an.drop")}
+                    </Button>
+                    <Button
+                      kind="ghost"
+                      title={t("an.sp.split")}
+                      aria-label={`${t("an.sp.split")} ${c.short}`}
+                      disabled={c.files.length < 2 || drops.has(c.sha)}
+                      onClick={() => openSplit(c)}
+                    >
+                      <Scissors size={ICON_SM} />
                     </Button>
                   </span>
                 </td>
@@ -1199,6 +1280,113 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
           onConfirm={(typed) => void apply(typed)}
           onClose={() => setConfirmReq(null)}
         />
+      )}
+
+      {splitFor && (
+        <Modal
+          title={`${t("an.sp.title")} — ${splitFor.short}`}
+          width={720}
+          onClose={() => setSplitFor(null)}
+          footer={
+            <>
+              <Button kind="ghost" onClick={() => setSplitFor(null)}>
+                {t("an.sp.cancel")}
+              </Button>
+              <Button kind="primary" onClick={() => void doSplit()} loading={busy}>
+                <Scissors size={ICON_SM} /> {t("an.sp.confirm")}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-slate-400">{t("an.sp.help")}</p>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-400">{t("an.sp.parts")} :</span>
+              <Button
+                kind="ghost"
+                disabled={splitMsgs.length <= 2}
+                onClick={() => setSplitPartCount(splitMsgs.length - 1)}
+                aria-label={t("an.sp.fewer")}
+              >
+                −
+              </Button>
+              <span className="font-mono">{splitMsgs.length}</span>
+              <Button
+                kind="ghost"
+                disabled={splitMsgs.length >= splitFor.files.length}
+                onClick={() => setSplitPartCount(splitMsgs.length + 1)}
+                aria-label={t("an.sp.more")}
+              >
+                +
+              </Button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-400">
+                    <th className="py-1 pr-2 text-left">{t("an.sp.file")}</th>
+                    <th className="py-1 text-left">{t("an.sp.assignTo")}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {splitFor.files.map((f) => (
+                    <tr key={f}>
+                      <td className={"py-1 pr-2 " + shaCls}>{f}</td>
+                      <td className="py-1">
+                        <div className="flex flex-wrap gap-1">
+                          {splitMsgs.map((_, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => setSplitAssign((a) => ({ ...a, [f]: i }))}
+                              className={
+                                "rounded px-2 py-0.5 " +
+                                ((splitAssign[f] ?? 0) === i
+                                  ? "bg-teal-600 text-white"
+                                  : "bg-slate-800 text-slate-300 hover:bg-slate-700")
+                              }
+                              aria-pressed={(splitAssign[f] ?? 0) === i}
+                            >
+                              {i + 1}
+                            </button>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="space-y-2">
+              {splitMsgs.map((m, i) => {
+                const n = splitFor.files.filter((f) => (splitAssign[f] ?? 0) === i).length;
+                return (
+                  <div key={i} className="space-y-1">
+                    <label className="flex items-center gap-2 text-xs text-slate-400">
+                      <span className="font-mono">
+                        {t("an.sp.part")} {i + 1}
+                      </span>
+                      <Badge tone={n === 0 ? "rose" : "teal"}>
+                        {n} {t("an.sp.filesN")}
+                      </Badge>
+                    </label>
+                    <input
+                      className={inputCls}
+                      value={m}
+                      placeholder={t("an.sp.msgPlaceholder")}
+                      aria-label={`${t("an.sp.part")} ${i + 1}`}
+                      onChange={(e) =>
+                        setSplitMsgs((arr) => arr.map((x, j) => (j === i ? e.target.value : x)))
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

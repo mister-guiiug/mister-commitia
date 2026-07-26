@@ -206,6 +206,21 @@ pub enum Operation {
     Reorder {
         order: Vec<String>,
     },
+    /// Découpe UN commit (C3) en plusieurs, par fichier : chaque `part` reçoit un
+    /// sous-ensemble DISJOINT des fichiers modifiés par `target`, dans l'ordre
+    /// donné. La réunion des `files` doit couvrir EXACTEMENT les fichiers du commit.
+    /// Op exclusive (un plan de découpe ne contient qu'elle) ; segment linéaire.
+    Split {
+        target: String,
+        parts: Vec<SplitPart>,
+    },
+}
+
+/// Une part d'une découpe (C3) : les fichiers qui lui reviennent + son message.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SplitPart {
+    pub files: Vec<String>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

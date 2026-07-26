@@ -114,7 +114,8 @@ const demoCommits: import("./types").CommitInfo[] = [
     sha: "a1".padEnd(40, "0"), short: "a1000000", parents: [], author_name: "Guillaume",
     author_email: "dev@example.org", date: "2026-07-22T09:00:00Z",
     subject: "feat(pay): add express payment flow", body: "", is_merge: false, signed: false,
-    on_remote: true, files_changed: 3, insertions: 120, deletions: 4, files: ["src/pay.rs"], trailers: [],
+    on_remote: true, files_changed: 3, insertions: 120, deletions: 4,
+    files: ["src/pay.rs", "src/pay_express.rs", "docs/pay.md"], trailers: [],
   },
   {
     sha: "b2".padEnd(40, "0"), short: "b2000000", parents: [], author_name: "Guillaume",
@@ -390,6 +391,22 @@ async function mockCall(cmd: string, args: Record<string, unknown> = {}): Promis
     }
     case "plan_dry_run": {
       const p = mock.plans.find((x) => x.id === args.planId)!;
+      // C3 : une découpe expand la cible en une entrée de mapping par part.
+      const splitOp = p.ops.find((o) => o.op === "split");
+      if (splitOp && splitOp.op === "split") {
+        await playPhases(args.taskId, "plan_dry_run", [
+          ["découpe : validation", 0, null, 200],
+          ["découpe : reconstruction du segment", 0, null, 400],
+          ["contrôle des invariants et écriture de la préview", 0, null, 200],
+        ]);
+        p.status = "dry_run_ok"; p.dry_run_at = now(); p.conflict = null;
+        p.preview_ref = `refs/mc/preview/${p.id}`;
+        p.mapping = splitOp.parts.map((_, i) => ({
+          old: [splitOp.target], new: `sp${i}`.padEnd(40, "1"),
+        }));
+        audit("git_rewrite", "dry_run", p.fingerprint.branch);
+        return p;
+      }
       // DEMO C1 : un réordonnancement des commits de démo (qui touchent le même
       // fichier) simule un conflit de rejeu à résoudre — sauf s'il l'a déjà été.
       const hasReorder = p.ops.some((o) => o.op === "reorder");

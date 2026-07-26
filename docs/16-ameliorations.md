@@ -233,6 +233,21 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > Abandonner ; reprise désactivée tant que des marqueurs subsistent). **Vérifié localement :
 > 2 tests d'intégration dédiés (pause→résolution multi-tours→préview ; abandon→brouillon) +
 > le proptest git réel étendu au chemin conflit ; suite cœur entièrement verte ; front
-> `tsc` vert, app chargée sans erreur console.** Reste au backlog : découpe de commit (C3,
-> PR8) ; distribution multi-OS + chaîne d'appro (D1/D2/D3, PR9) ; `tauri-plugin-updater`
-> signé (keypair minisign toujours indisponible sur ce poste).
+> `tsc` vert, app chargée sans erreur console.**
+>
+> **C3 — DÉCOUPE d'un commit par fichier (PR8).** Nouvelle opération exclusive `Split { target,
+> parts }` : chaque `part` reçoit un sous-ensemble DISJOINT des fichiers modifiés par la cible
+> + son message ; la réunion doit couvrir EXACTEMENT ces fichiers. Chemin dédié (hors sequencer,
+> `dry_run_split`) : le segment est reconstruit en git2 pur — les commits avant la cible sont
+> inchangés, la cible devient N commits (chacun adopte CUMULATIVEMENT la version cible de ses
+> fichiers via un index en mémoire → `write_tree`), et la queue est rejouée. Propriété clé : la
+> dernière part reconstitue exactement l'arbre de la cible, donc (a) aucune perte de contenu —
+> l'arbre final est identique, invariant vérifié ; (b) la queue se rejoue SANS conflit possible
+> (même arbre parent qu'avant). Garde-fous : segment linéaire (pas de merge), commit à parent
+> unique, ≥ 2 parts non vides à messages non vides, partition exacte, et un trailer PROTÉGÉ de
+> la cible doit survivre dans au moins une part. UI : bouton ✂ par commit (≥ 2 fichiers) →
+> modale d'affectation fichier→part + messages ; construit un plan neuf ne portant que la
+> découpe puis lance le dry-run. **Vérifié : 2 tests (découpe 1→2 avec queue rejouée + arbre
+> préservé ; partition incomplète refusée) ; suite cœur verte ; fmt + clippy propres ; front
+> `tsc` vert.** Reste au backlog : distribution multi-OS + chaîne d'appro (D1/D2/D3, PR9) ;
+> `tauri-plugin-updater` signé (keypair minisign toujours indisponible sur ce poste).

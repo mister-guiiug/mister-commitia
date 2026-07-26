@@ -106,12 +106,18 @@ export interface ScanResult {
 
 export type Risk = "low" | "medium" | "high";
 
+export interface SplitPart {
+  files: string[];
+  message: string;
+}
+
 export type Operation =
   | { op: "reword"; target: string; new_message: string }
   | { op: "squash"; targets: string[]; new_message: string }
   | { op: "fixup"; targets: string[] }
   | { op: "drop"; target: string; reason: string }
-  | { op: "reorder"; order: string[] };
+  | { op: "reorder"; order: string[] }
+  | { op: "split"; target: string; parts: SplitPart[] };
 
 export type PlanOp = Operation & {
   seq: number;
