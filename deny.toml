@@ -1,4 +1,5 @@
-# Configuration cargo-deny (job « Qualité » de la CI — check advisories).
+# Configuration cargo-deny (job « Qualité » de la CI — `cargo deny check`).
+# Contrôle (D3) : advisories (RustSec) + licences autorisées + sources + doublons.
 #
 # Politique : les VULNÉRABILITÉS bloquent toujours. Les advisories
 # « unmaintained » ci-dessous sont ignorées EXPLICITEMENT car elles viennent
@@ -25,3 +26,41 @@ ignore = [
     { id = "RUSTSEC-2025-0098", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
     { id = "RUSTSEC-2025-0100", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
 ]
+
+[licenses]
+# Liste blanche EXPLICITE : toute licence hors liste casse la CI (revue humaine
+# requise avant d'en ajouter une). Couvre la pile git2/reqwest/tokio/rusqlite/tauri.
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "MPL-2.0",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+]
+
+[[licenses.exceptions]]
+# `ring` agrège plusieurs licences (dont OpenSSL) de façon non-SPDX : toléré ici.
+allow = ["OpenSSL"]
+name = "ring"
+
+[bans]
+# Doublons de versions et dépendances joker : signalés (hygiène), non bloquants.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+# Seul crates.io est approuvé ; toute source git/registre inconnue est refusée
+# (empêche une substitution silencieuse de dépendance).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -249,5 +249,22 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > modale d'affectation fichier→part + messages ; construit un plan neuf ne portant que la
 > découpe puis lance le dry-run. **Vérifié : 2 tests (découpe 1→2 avec queue rejouée + arbre
 > préservé ; partition incomplète refusée) ; suite cœur verte ; fmt + clippy propres ; front
-> `tsc` vert.** Reste au backlog : distribution multi-OS + chaîne d'appro (D1/D2/D3, PR9) ;
-> `tauri-plugin-updater` signé (keypair minisign toujours indisponible sur ce poste).
+> `tsc` vert.**
+>
+> **D1/D2/D3 — distribution multi-OS & chaîne d'approvisionnement (PR9).**
+> **D3 (chaîne d'appro, vérifié localement)** : `deny.toml` + job CI « Chaîne d'appro » —
+> `cargo deny check` contrôle les vulnérabilités (RustSec), une **liste blanche EXPLICITE de
+> licences** (toute licence hors liste casse la CI → revue humaine avant ajout), et n'autorise
+> que crates.io comme source (bloque une substitution silencieuse de dépendance). Sur une PR,
+> un pas signale les **nouvelles dépendances** vs la base (diff du `Cargo.lock`, en avertissement)
+> pour une revue chaîne d'appro. **D1 (bundles Linux/macOS)** : job `release-unix` (matrice
+> ubuntu + macOS) ajouté à `release.yml` — `tauri build` produit `.deb`/`.AppImage` (Linux) et
+> `.dmg` (macOS), publiés sur la MÊME Release que les bundles Windows (sommes SHA-256 par
+> plateforme). **D2 (provenance SLSA)** : `actions/attest-build-provenance` atteste chaque
+> artefact distribué (Windows + Linux + macOS), permissions `id-token`/`attestations` par job.
+> **Limite assumée** : `release.yml` est déclenché par tag et compile Tauri par OS — **non
+> vérifiable sur ce poste** (ni tag-release, ni build Tauri Linux/macOS local) ; comme le job
+> Windows existant, il est validé structurellement (YAML valide, patrons standards
+> `attest-build-provenance`/`tauri build`) et sera exercé au premier tag `v*`. Seul résidu V2 :
+> `tauri-plugin-updater` signé (keypair minisign indisponible sur ce poste — blocage matériel,
+> pas de contournement).
