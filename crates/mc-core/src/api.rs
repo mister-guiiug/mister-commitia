@@ -415,11 +415,23 @@ impl Core {
                 "un plan appliqué est immuable : créer un nouveau plan".into(),
             ));
         }
+        // Éditer les ops invalide une éventuelle session de conflit EN PAUSE (la
+        // todo du rebase ne correspond plus aux nouveaux groupes) : on l'abandonne
+        // et on efface l'état de conflit, sinon le worktree fuirait et une reprise
+        // buterait sur une incohérence.
+        if self.conflicts.lock().unwrap().contains_key(plan_id) {
+            if let Ok(r) = self.store.repo_get(&plan.repo_id) {
+                if let Ok(repo) = GitEngine::open(&r.local_path) {
+                    self.abort_conflict_session(&repo, plan_id);
+                }
+            }
+        }
         plan.ops = ops;
         plan.status = PlanStatus::Draft;
         plan.dry_run_hash = None;
         plan.dry_run_at = None;
         plan.mapping.clear();
+        plan.conflict = None;
         self.store.plan_save(&plan)?;
         Ok(plan)
     }

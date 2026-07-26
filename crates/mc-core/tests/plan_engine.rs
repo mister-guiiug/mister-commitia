@@ -1383,3 +1383,88 @@ fn c1_interactive_conflict_abort_resets_to_draft() {
     // Plus de session : reprendre échoue proprement (pas de panique).
     assert!(core.plan_conflict_continue(&plan.id).is_err());
 }
+
+/// Revue A (sécurité) — `conflict_resolve` refuse un chemin absolu ou une
+/// remontée `..` et n'écrit RIEN hors du worktree.
+#[test]
+fn c1_conflict_resolve_rejects_path_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("wt")).unwrap();
+    let sentinel = tmp.path().join("evil.txt"); // hors du worktree `wt`
+    assert!(mc_core::gitx::rewrite::conflict_resolve(tmp.path(), "../evil.txt", "PWNED").is_err());
+    assert!(!sentinel.exists(), "aucune écriture par remontee ..");
+    let abs = tmp.path().join("abs.txt");
+    assert!(
+        mc_core::gitx::rewrite::conflict_resolve(tmp.path(), abs.to_str().unwrap(), "x").is_err()
+    );
+    assert!(!abs.exists(), "aucune écriture par chemin absolu");
+    // Un chemin relatif normal PASSE le garde-fou : le fichier atterrit DANS le
+    // worktree (le `git add` échoue ensuite faute de dépôt git ici, sans importance).
+    let _ = mc_core::gitx::rewrite::conflict_resolve(tmp.path(), "ok.txt", "y");
+    assert!(
+        tmp.path().join("wt/ok.txt").exists(),
+        "un chemin sûr écrit bien dans le worktree"
+    );
+}
+
+/// Revue C (défense en profondeur) — `split_segment` refuse un segment contenant
+/// un merge (sinon il le linéariserait en perdant le 2e parent, sans que les
+/// invariants d'arbre le détectent).
+#[test]
+fn c3_split_segment_refuses_merge_in_segment() {
+    let (f, (c, _d, _e, m)) = merge_fixture();
+    let base = f.repo.refname_to_id("refs/heads/main").unwrap();
+    let parts = vec![
+        SplitPart {
+            files: vec!["src/c.rs".into()],
+            message: "a".into(),
+        },
+        SplitPart {
+            files: vec!["x".into()],
+            message: "b".into(),
+        },
+    ];
+    // Cible = C (non-merge), mais le segment base..M contient le merge M.
+    let err = mc_core::gitx::split::split_segment(&f.repo, base, m, c, &parts)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("merge") || err.contains("linéaris"),
+        "un merge dans le segment doit etre refuse : {err}"
+    );
+}
+
+/// Revue E — éditer les ops pendant un conflit efface l'état de conflit et
+/// abandonne la session (pas de worktree orphelin, pas de reprise incohérente).
+#[test]
+fn c1_editing_ops_clears_conflict_session() {
+    let (f, c1, c2) = conflict_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/conflict").unwrap();
+    let order = vec![c2.to_string(), c1.to_string()];
+    let plan = core
+        .plan_set_ops(&plan.id, vec![op(1, Operation::Reorder { order })])
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(plan.status, PlanStatus::Conflict);
+
+    // Éditer les ops : statut Draft, conflit effacé, session abandonnée.
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Reword {
+                    target: c1.to_string(),
+                    new_message: "chore: edit".into(),
+                },
+            )],
+        )
+        .unwrap();
+    assert_eq!(plan.status, PlanStatus::Draft);
+    assert!(plan.conflict.is_none());
+    assert!(
+        core.plan_conflict_continue(&plan.id).is_err(),
+        "la session a bien ete abandonnee"
+    );
+}
