@@ -277,3 +277,27 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > la langue). Vérif automatisée : un contrôle croise chaque appel `t("clé")` de toutes les pages
 > avec le dictionnaire → **311 clés, 0 manquante** (le seul défaut que `tsc` ne voit pas). Bascule
 > FR↔EN désormais INTÉGRALE sur les six pages. Front `tsc` vert.
+
+> **Revue adverse du code V2+ — durcissement le 2026-07-26.** Après la série V2+, une revue
+> adverse (sous-agent + relecture) du code safety-critical fraîchement mergé (C1 worktree/session,
+> C3 index git2) a remonté des défauts réels, tous corrigés :
+> **A (sécurité)** — `conflict_resolve` écrivait `session_dir/wt/<file>` SANS valider `file` : un
+> chemin absolu ou une remontée `..` sortait du worktree (écrasement arbitraire hors dépôt). Corrigé :
+> rejet de l'absolu / `..` / racine avant écriture (test de traversée).
+> **B (robustesse)** — après un redémarrage de l'app, le registre de sessions (en mémoire) est perdu
+> mais l'entrée admin `.git/worktrees/` du chemin déterministe persiste ; sans `prune`, le
+> `worktree add` suivant échouait (« missing but already registered ») et BLOQUAIT le plan. Corrigé :
+> `git worktree prune` avant chaque `worktree add` (+ `cleanup_session` supprime le physique avant de
+> pruner).
+> **C (défense en profondeur)** — `split_segment` aurait LINÉARISÉ un merge présent dans le segment
+> (2e parent perdu, arbre pourtant préservé → invariants aveugles, corruption silencieuse) ; non
+> atteignable via `dry_run_split` (qui refuse déjà les merges), mais on ne s'y fie plus : refus
+> explicite d'un merge dans le segment, testé en direct.
+> **E** — `plan_set_ops` (édition des ops pendant un conflit) n'effaçait pas l'état : worktree
+> orphelin + `plan.conflict` périmé. Corrigé : abandon de la session + `conflict = None`.
+> **Mineurs** — conflit BINAIRE présenté avec une sentinelle à marqueurs (au lieu d'un contenu vide
+> qui l'écraserait) ; message d'erreur du cas « commit vidé par la résolution » clarifié.
+> Axes attaqués SANS bug (vérifiés) : `idx_entry` flags/mode, `overlay_tree` (suppressions, chemins
+> imbriqués, renommage), rejeu de queue (author/committer, fichier supprimé+retouché), gpgsign/hooks
+> de `sequencer_continue`. **3 tests de régression ajoutés** (traversée refusée, merge-segment
+> refusé, édition-ops efface le conflit) → plan_engine 31/31.

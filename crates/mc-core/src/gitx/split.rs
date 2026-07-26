@@ -101,6 +101,20 @@ pub fn split_segment(
         CoreError::Invalid("le commit à découper n'est pas dans le segment".into())
     })?;
 
+    // Défense en profondeur : un merge dans le segment serait LINÉARISÉ par le
+    // rejeu (étape 3 recrée chaque commit avec un parent unique → 2e parent perdu).
+    // L'arbre final resterait égal (linéariser préserve l'arbre), donc les
+    // invariants d'arbre ne l'attraperaient PAS → corruption silencieuse.
+    // L'appelant (`dry_run_split`) le refuse déjà ; on ne s'y fie pas ici.
+    for oid in &segment {
+        if repo.find_commit(*oid)?.parent_count() > 1 {
+            return Err(CoreError::Refused(
+                "découpe impossible : le segment contient un merge (linéarisation interdite)"
+                    .into(),
+            ));
+        }
+    }
+
     let target_commit = repo.find_commit(target)?;
     let target_tree = target_commit.tree()?;
     let author = target_commit.author();

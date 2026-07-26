@@ -554,7 +554,9 @@ pub enum RebaseStep {
     Conflict(Vec<(String, String)>),
 }
 
-/// Nettoie le worktree lié et le dossier de session.
+/// Nettoie le worktree lié et le dossier de session. On supprime le physique
+/// AVANT de `prune` : si `worktree remove` échoue, le prune final réclame quand
+/// même l'entrée admin (le dossier ayant alors disparu).
 fn cleanup_session(repo_dir: &Path, session_dir: &Path) {
     let wt = session_dir.join("wt");
     let _ = run_git(
@@ -562,18 +564,28 @@ fn cleanup_session(repo_dir: &Path, session_dir: &Path) {
         &["worktree", "remove", "--force", &wt.to_string_lossy()],
         &[],
     );
-    let _ = run_git(repo_dir, &["worktree", "prune"], &[]);
     let _ = std::fs::remove_dir_all(session_dir);
+    let _ = run_git(repo_dir, &["worktree", "prune"], &[]);
 }
 
-/// Lit les fichiers en conflit du worktree (chemin + contenu à marqueurs).
+/// Lit les fichiers en conflit du worktree (chemin + contenu à marqueurs). Un
+/// fichier BINAIRE (contenu non-UTF-8) ne peut pas être résolu comme du texte :
+/// on renvoie une sentinelle porteuse de marqueurs (la reprise reste bloquée tant
+/// qu'ils subsistent) plutôt qu'un contenu vide qui écraserait le binaire.
 fn conflicted_files(wt: &Path) -> Vec<(String, String)> {
     run_git(wt, &["diff", "--name-only", "--diff-filter=U"], &[])
         .unwrap_or_default()
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|p| {
-            let content = std::fs::read_to_string(wt.join(p)).unwrap_or_default();
+            let content = match std::fs::read(wt.join(p)) {
+                Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|_| {
+                    "<<<<<<< CONFLIT BINAIRE\n(contenu non textuel — résoudre hors de l'outil puis \
+                     `git add`)\n>>>>>>>\n"
+                        .to_string()
+                }),
+                Err(_) => String::new(),
+            };
             (p.to_string(), content)
         })
         .collect()
@@ -606,7 +618,8 @@ fn step_from_result(
                 let _ = run_git(&wt, &["rebase", "--abort"], &[]);
                 cleanup_session(repo_dir, session_dir);
                 Err(CoreError::Refused(format!(
-                    "le rejeu de la structure a échoué (hors conflit résoluble) : {e}"
+                    "le rejeu a échoué hors conflit résoluble (une résolution a-t-elle vidé un \
+                     commit ? git ne peut alors pas poursuivre) : {e}"
                 )))
             } else {
                 // Conflit : on LAISSE le worktree en pause pour résolution.
@@ -650,6 +663,12 @@ pub fn sequencer_start(
     }
     std::fs::write(&todo_src, &todo)?;
 
+    // Réclame les worktrees périmés AVANT l'ajout : après un redémarrage de l'app,
+    // le registre de sessions (en mémoire) est perdu mais l'entrée admin du dépôt
+    // pour ce chemin déterministe persiste ; sans ce prune, `worktree add` sur le
+    // même chemin échouerait (« missing but already registered ») et bloquerait le
+    // plan. `prune` ne réclame que les entrées dont le dossier a disparu.
+    let _ = run_git(&repo_dir, &["worktree", "prune"], &[]);
     run_git(
         &repo_dir,
         &[
@@ -724,7 +743,26 @@ pub fn sequencer_abort(repo: &Repository, session_dir: &Path) {
 }
 
 /// Écrit le contenu résolu d'un fichier en conflit puis le stage (`git add`).
+///
+/// SÉCURITÉ : `file` DOIT être un chemin relatif au worktree, sans remontée. On
+/// rejette l'absolu (qui remplacerait la cible) et tout composant `..`/racine/
+/// préfixe (qui sortirait du worktree) AVANT d'écrire — sinon un appelant (ou du
+/// contenu de dépôt non fiable rendu dans la webview) pourrait écraser un fichier
+/// arbitraire du poste via `Path::join`.
 pub fn conflict_resolve(session_dir: &Path, file: &str, content: &str) -> Result<()> {
+    use std::path::Component;
+    let rel = Path::new(file);
+    let unsafe_path = rel.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    });
+    if file.is_empty() || rel.is_absolute() || unsafe_path {
+        return Err(CoreError::Refused(format!(
+            "chemin de résolution invalide (absolu ou remontée « .. » interdite) : {file}"
+        )));
+    }
     let wt = session_dir.join("wt");
     let target = wt.join(file);
     if let Some(parent) = target.parent() {
