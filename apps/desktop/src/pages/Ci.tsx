@@ -85,7 +85,7 @@ export default function CiPage() {
       setToken("");
       setAccount(acct.id);
       await refresh();
-      toast("success", `Accès validé — ${msg}. Token envoyé au coffre du système.`);
+      toast("success", t("ci.tt.access", { msg }));
     } catch (e) {
       setError(asIpcError(e).message);
     } finally {
@@ -100,10 +100,10 @@ export default function CiPage() {
     try {
       const list = await call<CiRun[]>("ci_inventory", { accountId: account, max: 500, taskId });
       setRuns(list);
-      toast("info", `${list.length} runs inventoriés`);
+      toast("info", t("ci.tt.inventoried", { n: list.length }));
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Inventaire annulé");
+      if (ie.code === "cancelled") toast("info", t("ci.tt.inventoryCancelled"));
       else setError(ie.message);
     } finally {
       task.end();
@@ -125,7 +125,7 @@ export default function CiPage() {
       });
       setPolicy(p.id);
       await refresh();
-      toast("success", `Politique « ${p.name} » enregistrée`);
+      toast("success", t("ci.tt.policySaved", { name: p.name }));
     } catch (e) {
       setError(asIpcError(e).message);
     }
@@ -139,10 +139,10 @@ export default function CiPage() {
     try {
       const r = await call<SimulationReport>("ci_simulate", { accountId: account, policyId: policy, max: 500, taskId });
       setReport(r);
-      toast("success", `Simulation terminée — ${r.candidates.length} candidat(s), ${r.protected.length} protégé(s), aucune suppression émise`);
+      toast("success", t("ci.tt.simDone", { cand: r.candidates.length, prot: r.protected.length }));
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Simulation annulée — aucun rapport produit, aucune suppression émise");
+      if (ie.code === "cancelled") toast("info", t("ci.tt.simCancelled"));
       else setError(ie.message);
     } finally {
       task.end();
@@ -157,7 +157,7 @@ export default function CiPage() {
       await call("ci_delete_run", { accountId: account, policyId: policy, run, confirm });
       setReport((r) => r && { ...r, candidates: r.candidates.filter((c) => c.run_id !== run.run_id) });
       setDeleting(null);
-      toast("success", `Run ${run.run_id} supprimé — action journalisée`);
+      toast("success", t("ci.tt.runDeleted", { id: run.run_id }));
     } catch (e) {
       setError(asIpcError(e).message);
     } finally {
@@ -186,12 +186,15 @@ export default function CiPage() {
       toast(
         res.failed.length > 0 ? "error" : res.cancelled ? "info" : "success",
         res.cancelled
-          ? `Interrompu : ${res.deleted.length} supprimé(s), reprise possible`
-          : `${res.deleted.length} run(s) supprimé(s)` + (res.failed.length ? `, ${res.failed.length} échec(s)` : "") + " — journalisé",
+          ? t("ci.tt.batchInterrupted", { n: res.deleted.length })
+          : t("ci.tt.batchDeleted", {
+              n: res.deleted.length,
+              fail: res.failed.length ? t("ci.tt.failSuffix", { f: res.failed.length }) : "",
+            }),
       );
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Suppression en masse annulée");
+      if (ie.code === "cancelled") toast("info", t("ci.tt.batchCancelled"));
       else setError(ie.message);
     } finally {
       task.end();
@@ -204,7 +207,7 @@ export default function CiPage() {
 
   const doPurge = async (confirm: string) => {
     if (!purgeLogs && !purgeArtifacts) {
-      setError("Rien à purger : activer les logs et/ou les artefacts.");
+      setError(t("ci.err.nothingToPurge"));
       return;
     }
     setError(null);
@@ -219,13 +222,17 @@ export default function CiPage() {
       toast(
         failed > 0 ? "error" : res.cancelled ? "info" : "success",
         res.cancelled
-          ? `Purge interrompue : ${res.artifacts_deleted} artefact(s), ${res.logs_deleted} log(s)`
-          : `${res.artifacts_deleted} artefact(s) + ${res.logs_deleted} log(s) purgés sur ${res.runs} run(s)`
-            + (failed ? `, ${failed} échec(s)` : "") + " — runs conservés, journalisé",
+          ? t("ci.tt.purgeInterrupted", { a: res.artifacts_deleted, l: res.logs_deleted })
+          : t("ci.tt.purgeDone", {
+              a: res.artifacts_deleted,
+              l: res.logs_deleted,
+              runs: res.runs,
+              fail: failed ? t("ci.tt.failSuffix", { f: failed }) : "",
+            }),
       );
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Purge annulée");
+      if (ie.code === "cancelled") toast("info", t("ci.tt.purgeCancelled"));
       else setError(ie.message);
     } finally {
       task.end();

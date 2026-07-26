@@ -10,7 +10,7 @@ import type {
   RepoRef, RiskAxis, ScanResult,
 } from "../types";
 import GitGraph from "../GitGraph";
-import { t, useLang } from "../i18n";
+import { getLang, t, useLang } from "../i18n";
 import { useTask } from "../tasks";
 import {
   Badge, Button, Card, ConfirmTyped, Empty, ErrorBox, ICON_SM, Modal, ProgressPanel,
@@ -83,7 +83,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       setProposals(await call<Proposal[]>("proposals_list", { repoId: repo.id }));
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Analyse annulée — aucun effet de bord");
+      if (ie.code === "cancelled") toast("info", t("an.tt.scanCancelled"));
       else setError(ie.message);
     } finally {
       task.end();
@@ -162,8 +162,8 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     if (g.length === 0) {
       setError(
         skill === "commit-synthesis"
-          ? "Sélectionner au moins deux commits pour une synthèse."
-          : "Sélectionner au moins un commit.",
+          ? t("an.err.selectTwo")
+          : t("an.err.selectOne"),
       );
       return;
     }
@@ -180,8 +180,8 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       toast(
         refused === generated.length ? "info" : "success",
         refused > 0
-          ? `${generated.length} proposition(s), dont ${refused} refus de gouvernance`
-          : `${generated.length} proposition(s) générée(s) — à vous de décider`,
+          ? t("an.tt.propRefused", { n: generated.length, refused })
+          : t("an.tt.propGenerated", { n: generated.length }),
       );
     } catch (e) {
       const ie = asIpcError(e);
@@ -190,7 +190,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
         setConsent({ preview, groups: g });
       } else if (ie.code === "cancelled") {
         setProposals(await call<Proposal[]>("proposals_list", { repoId: repo.id }));
-        toast("info", "Génération annulée — les propositions déjà produites sont conservées");
+        toast("info", t("an.tt.genCancelled"));
       } else {
         setError(ie.message);
       }
@@ -260,13 +260,13 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
         });
       }
       if (ops.length === 0) {
-        setError("Aucune opération : accepter des propositions ou marquer des abandons d'abord.");
+        setError(t("an.err.noOps"));
         return;
       }
       const withOps = await call<Plan>("plan_set_ops", { planId: p.id, ops });
       setPlan(withOps);
       setRisks(await call<RiskAxis[]>("plan_risk", { planId: withOps.id }));
-      toast("info", `Plan composé (${ops.length} opération(s)) — dry-run requis avant application`);
+      toast("info", t("an.tt.composed", { n: ops.length }));
     } catch (e) {
       setError(asIpcError(e).message);
     } finally {
@@ -287,11 +287,11 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
         toast("info", t("an.cf.toastPaused"));
       } else {
         setRisks(await call<RiskAxis[]>("plan_risk", { planId: plan.id }));
-        toast("success", "Dry-run réussi — résultat réel construit dans la préview, branche intacte");
+        toast("success", t("an.tt.dryRunOk"));
       }
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Dry-run annulé — branche et préview intactes");
+      if (ie.code === "cancelled") toast("info", t("an.tt.dryRunCancelled"));
       else setError(ie.message);
     } finally {
       task.end();
@@ -322,7 +322,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       }
     } catch (e) {
       const ie = asIpcError(e);
-      if (ie.code === "cancelled") toast("info", "Reprise annulée");
+      if (ie.code === "cancelled") toast("info", t("an.tt.continueCancelled"));
       else setError(ie.message);
     } finally {
       task.end();
@@ -423,14 +423,14 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       setPlan(updated);
       setConfirmReq(null);
       task.end();
-      toast("success", `Plan appliqué — backup ${updated.backup_ref ?? ""}`);
+      toast("success", t("an.tt.applied", { backup: updated.backup_ref ?? "" }));
       await doScan(branch);
     } catch (e) {
       const ie = asIpcError(e);
       if (ie.code === "confirm_required") {
         setConfirmReq({ expected: ie.expected ?? branch, message: ie.message });
       } else if (ie.code === "cancelled") {
-        toast("info", "Application annulée avant le backup — rien n'a été écrit");
+        toast("info", t("an.tt.applyCancelled"));
       } else {
         setError(ie.message);
       }
@@ -446,7 +446,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     setBusy(true);
     try {
       setPlan(await call<Plan>("plan_rollback", { planId: plan.id }));
-      toast("success", "Branche restaurée depuis le backup");
+      toast("success", t("an.tt.rolledBack"));
       await doScan(branch);
     } catch (e) {
       setError(asIpcError(e).message);
@@ -485,8 +485,8 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
       toast(
         "success",
         res.forced
-          ? "Push forcé effectué (force-with-lease) — historique distant réécrit"
-          : "Commits poussés vers le remote",
+          ? t("an.tt.pushForced")
+          : t("an.tt.pushed"),
       );
       await doScan(branch);
     } catch (e) {
@@ -505,7 +505,7 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
     a.download = `${plan.id}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
-    toast("success", "Plan exporté (JSON reproductible)");
+    toast("success", t("an.tt.exported"));
   };
 
   // F9 : rapport HTML autonome (revue d'équipe hors outil).
@@ -529,15 +529,19 @@ export default function AnalyzePage({ repo }: { repo: RepoRef }) {
         return `<tr><td><code>${m.old.map((o) => o.slice(0, 8)).join("+")}</code></td><td><code>${m.new.slice(0, 8)}</code></td><td>${esc(subjects)}</td></tr>`;
       })
       .join("");
-    const html = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Plan ${plan.id} — ${esc(repo.name)}</title>
+    // Le rapport suit la langue de l'UI (titres via i18n, date localisée). Les
+    // valeurs interpolées (nom de dépôt, branche, réfs) restent échappées par esc().
+    const lang = getLang();
+    const dateStr = new Date().toLocaleString(lang === "fr" ? "fr-FR" : "en-US");
+    const html = `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><title>${esc(repo.name)} · ${esc(plan.id)}</title>
 <style>body{font-family:system-ui;margin:2rem auto;max-width:60rem;color:#1e293b}table{border-collapse:collapse;width:100%;margin:.5rem 0}td,th{border:1px solid #cbd5e1;padding:.3rem .5rem;text-align:left;font-size:.9rem}code{font-family:ui-monospace,monospace;background:#f1f5f9;padding:0 .2rem}.ok{color:#0f766e}.attention{color:#b45309}.bloquant{color:#be123c}h1{font-size:1.3rem}h2{font-size:1rem;margin-top:1.5rem}footer{margin-top:2rem;font-size:.8rem;color:#64748b}</style></head><body>
-<h1>Plan de réécriture — ${esc(repo.name)} · ${esc(plan.fingerprint.branch)}</h1>
-<p>Statut : <b>${plan.status}</b> · généré le ${new Date().toLocaleString("fr-FR")} · plan <code>${plan.id}</code></p>
-<h2>Opérations (${plan.ops.length})</h2><table><tr><th>#</th><th>Opération</th><th>Cible(s)</th><th>Détail</th><th>Risque</th></tr>${opRows}</table>
-<h2>Risques</h2><ul>${riskRows}</ul>
-${plan.mapping.length > 0 ? `<h2>Avant / après (dry-run réel — ${esc(plan.preview_ref ?? "")})</h2><table><tr><th>Anciens SHA</th><th>Nouveau</th><th>Sujets</th></tr>${mapRows}</table>` : ""}
-${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <code>${esc(plan.backup_tag ?? "")}</code></p>` : ""}
-<footer>Généré par mister-commitia — garde-fous : dry-run obligatoire, backup automatique, branches protégées bloquées, journal d'audit local.</footer>
+<h1>${t("an.rep.h1", { repo: esc(repo.name), branch: esc(plan.fingerprint.branch) })}</h1>
+<p>${t("an.rep.status", { status: plan.status, date: dateStr, id: plan.id })}</p>
+<h2>${t("an.rep.ops", { n: plan.ops.length })}</h2><table><tr><th>${t("an.rep.thNum")}</th><th>${t("an.rep.thOp")}</th><th>${t("an.rep.thTargets")}</th><th>${t("an.rep.thDetail")}</th><th>${t("an.rep.thRisk")}</th></tr>${opRows}</table>
+<h2>${t("an.rep.risks")}</h2><ul>${riskRows}</ul>
+${plan.mapping.length > 0 ? `<h2>${t("an.rep.beforeAfter", { ref: esc(plan.preview_ref ?? "") })}</h2><table><tr><th>${t("an.rep.thOld")}</th><th>${t("an.rep.thNew")}</th><th>${t("an.rep.thSubjects")}</th></tr>${mapRows}</table>` : ""}
+${plan.backup_ref ? `<p>${t("an.rep.backup", { ref: esc(plan.backup_ref), tag: esc(plan.backup_tag ?? "") })}</p>` : ""}
+<footer>${t("an.rep.footer")}</footer>
 </body></html>`;
     const blob = new Blob([html], { type: "text/html" });
     const a = document.createElement("a");
@@ -545,7 +549,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
     a.download = `rapport-${plan.id}.html`;
     a.click();
     URL.revokeObjectURL(a.href);
-    toast("success", "Rapport HTML exporté");
+    toast("success", t("an.tt.htmlExported"));
   };
 
   const importPlan = async (file: File) => {
@@ -555,7 +559,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
       const imported = await call<Plan>("plan_import", { repoId: repo.id, json });
       setPlan(imported);
       setRisks(await call<RiskAxis[]>("plan_risk", { planId: imported.id }));
-      toast("success", "Plan importé — statut brouillon, dry-run requis");
+      toast("success", t("an.tt.imported"));
     } catch (e) {
       setError(asIpcError(e).message);
     }
@@ -628,8 +632,8 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
             onKeyDown={(e) => {
               if (e.key === "Enter") void doScan(branch);
             }}
-            aria-label="Base du segment : branche, tag ou SHA (F6)"
-            title="Forcer la base du segment (branche, tag ou SHA) — utile pour les branches empilées"
+            aria-label={t("an.aria.base")}
+            title={t("an.ti.base")}
           />
           <Button kind="ghost" onClick={() => void doScan(branch)} disabled={busy}>
             appliquer
@@ -765,7 +769,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 <td className="py-1.5">
                   <input
                     type="checkbox"
-                    aria-label={`Sélectionner le commit ${c.short} — ${c.subject}`}
+                    aria-label={t("an.aria.selectCommit", { short: c.short, subject: c.subject })}
                     checked={selection.has(c.sha)}
                     onChange={() => toggle(c.sha)}
                   />
@@ -774,7 +778,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                   <button
                     type="button"
                     className={shaCls + " underline decoration-slate-700 underline-offset-2 hover:text-teal-300"}
-                    title="Voir le diff de ce commit"
+                    title={t("an.ti.diff")}
                     onClick={() => void showDiff(c)}
                   >
                     {c.short}
@@ -886,7 +890,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 <div key={p.id} className="rounded border border-slate-800 bg-slate-950/60 p-2.5">
                   <div className="flex items-center gap-2 text-xs">
                     <Badge tone="violet">{p.skill}</Badge>
-                    <Badge tone={riskTone(p.risk)}>risque {p.risk}</Badge>
+                    <Badge tone={riskTone(p.risk)}>{t("an.prop.risk", { risk: p.risk })}</Badge>
                     <Badge
                       tone={
                         p.status === "proposed" ? "sky"
@@ -895,25 +899,25 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                         : "slate"
                       }
                     >
-                      {p.status === "proposed" ? "à décider"
-                        : p.status === "accepted" ? "acceptée"
-                        : p.status === "edited" ? "éditée"
-                        : p.status === "refused" ? "refus de la skill"
-                        : "rejetée"}
+                      {p.status === "proposed" ? t("an.prop.st.proposed")
+                        : p.status === "accepted" ? t("an.prop.st.accepted")
+                        : p.status === "edited" ? t("an.prop.st.edited")
+                        : p.status === "refused" ? t("an.prop.st.refused")
+                        : t("an.prop.st.rejected")}
                     </Badge>
                     <span className={"ml-auto " + shaCls}>{p.targets.map((t) => t.slice(0, 8)).join(", ")}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                     <div>
-                      <div className="mb-0.5 text-slate-500">Avant</div>
+                      <div className="mb-0.5 text-slate-500">{t("an.prop.before")}</div>
                       <pre className="whitespace-pre-wrap rounded bg-slate-900 p-2 text-slate-400">{p.before}</pre>
                     </div>
                     <div>
-                      <div className="mb-0.5 text-slate-500">{p.after ? "Après (proposé)" : "Refus motivé"}</div>
+                      <div className="mb-0.5 text-slate-500">{p.after ? t("an.prop.afterLabel") : t("an.prop.refusedLabel")}</div>
                       {p.status === "proposed" ? (
                         <textarea
                           className={inputCls + " h-full min-h-20 font-mono"}
-                          aria-label="Message proposé (éditable)"
+                          aria-label={t("an.aria.propMsg")}
                           value={editing[p.id] ?? p.after ?? ""}
                           onChange={(e) => setEditing((m) => ({ ...m, [p.id]: e.target.value }))}
                         />
@@ -934,10 +938,10 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                         onClick={() => decide(p, editing[p.id] && editing[p.id] !== p.after ? "edit" : "accept")}
                       >
                         <CheckCircle2 size={ICON_SM} />{" "}
-                        {editing[p.id] && editing[p.id] !== p.after ? "Valider l'édition" : "Accepter"}
+                        {editing[p.id] && editing[p.id] !== p.after ? t("an.prop.validate") : t("an.prop.accept")}
                       </Button>
                       <Button onClick={() => decide(p, "reject")}>
-                        <XCircle size={ICON_SM} /> Rejeter
+                        <XCircle size={ICON_SM} /> {t("an.prop.reject")}
                       </Button>
                     </div>
                   )}
@@ -978,16 +982,16 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 </Button>
               )}
               {plan && (
-                <Button kind="ghost" onClick={exportPlan} title="Exporter le plan reproductible (JSON)">
+                <Button kind="ghost" onClick={exportPlan} title={t("an.ti.export")}>
                   <Download size={ICON_SM} />
                 </Button>
               )}
               {plan && (
-                <Button kind="ghost" onClick={exportHtmlReport} title="Exporter le rapport HTML (revue d'équipe)">
+                <Button kind="ghost" onClick={exportHtmlReport} title={t("an.ti.htmlExport")}>
                   <FileText size={ICON_SM} />
                 </Button>
               )}
-              <Button kind="ghost" onClick={() => importRef.current?.click()} title="Importer un plan (JSON)">
+              <Button kind="ghost" onClick={() => importRef.current?.click()} title={t("an.ti.import")}>
                 <Upload size={ICON_SM} />
               </Button>
               <input
@@ -995,7 +999,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 type="file"
                 accept="application/json"
                 className="hidden"
-                aria-label="Importer un plan JSON"
+                aria-label={t("an.aria.import")}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) void importPlan(f);
@@ -1044,7 +1048,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                         <textarea
                           className={inputCls + " h-48 font-mono text-xs"}
                           spellCheck={false}
-                          aria-label={`Résolution de ${cf.path}`}
+                          aria-label={t("an.cf.ariaResolve", { path: cf.path })}
                           value={val}
                           onChange={(e) =>
                             setConflictEdits((s) => ({ ...s, [cf.path]: e.target.value }))
@@ -1127,7 +1131,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
 
       {consent && (
         <Modal
-          title="Consentement — envoi à un fournisseur IA distant"
+          title={t("an.md.consentTitle")}
           tone="sky"
           width={640}
           onClose={() => setConsent(null)}
@@ -1177,7 +1181,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
 
       {pushPreview && (
         <Modal
-          title="Pousser vers le remote"
+          title={t("an.md.pushTitle")}
           tone={pushPreview.needs_force ? "rose" : "sky"}
           width={620}
           onClose={() => setPushPreview(null)}
@@ -1194,7 +1198,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                 }
                 onClick={doPush}
               >
-                {pushPreview.needs_force ? "Réécrire le remote (force-with-lease)" : "Pousser"}
+                {pushPreview.needs_force ? t("an.push.forceLabel") : t("an.push.pushLabel")}
               </Button>
             </>
           }
@@ -1257,7 +1261,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
                   value={pushTyped}
                   onChange={(e) => setPushTyped(e.target.value)}
                   placeholder={branch}
-                  aria-label={`Saisir ${branch} pour confirmer le push forcé`}
+                  aria-label={t("an.aria.confirmPush", { branch })}
                 />
               </>
             ) : null}
@@ -1267,7 +1271,7 @@ ${plan.backup_ref ? `<p>Backup : <code>${esc(plan.backup_ref)}</code> · tag <co
 
       {confirmReq && plan && (
         <ConfirmTyped
-          title="Application sur branche partagée"
+          title={t("an.md.applyTitle")}
           description={
             <>
               {confirmReq.message} L'historique déjà poussé sera réécrit&nbsp;; un backup (branche + tag) est créé

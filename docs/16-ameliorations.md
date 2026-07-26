@@ -268,3 +268,12 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > `attest-build-provenance`/`tauri build`) et sera exercé au premier tag `v*`. Seul résidu V2 :
 > `tauri-plugin-updater` signé (keypair minisign indisponible sur ce poste — blocage matériel,
 > pas de contournement).
+
+> **F11 i18n — SOLDÉ le 2026-07-26.** Le résidu assumé (toasts interpolés + descriptions de
+> modales/labels CI/Analyse encore en dur) est levé : `t()` accepte désormais des **paramètres**
+> `{marqueur}` (interpolation), et TOUTES les chaînes visibles restantes d'Analyse et CI/CD sont
+> externalisées — toasts (simples + interpolés + ternaires), erreurs, boutons, statuts de
+> propositions, aria-labels, et le **rapport HTML exporté** (titres via i18n + `lang`/date suivant
+> la langue). Vérif automatisée : un contrôle croise chaque appel `t("clé")` de toutes les pages
+> avec le dictionnaire → **311 clés, 0 manquante** (le seul défaut que `tsc` ne voit pas). Bascule
+> FR↔EN désormais INTÉGRALE sur les six pages. Front `tsc` vert.
