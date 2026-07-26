@@ -34,7 +34,7 @@ jobs:
         run: cargo check -p mc-desktop --locked
 
   qualite:
-    name: Qualité (fmt, clippy, advisories)
+    name: Qualité (fmt, clippy, chaîne d'appro)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +48,28 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy (zéro warning)
         run: cargo clippy -p mc-core --all-targets --locked -- -D warnings
-      - name: Advisories (RustSec)
+      - name: Chaîne d'appro (advisories + licences + sources)
+        # D3 : check COMPLET (plus seulement advisories) — licences hors liste
+        # blanche, sources non-crates.io et doublons sont désormais contrôlés.
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check advisories
+          command: check
+      - name: Nouvelles dépendances vs base (revue sur PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.base_ref }}" --depth=1 || true
+          git show "origin/${{ github.base_ref }}:Cargo.lock" > /tmp/base.lock 2>/dev/null || : > /tmp/base.lock
+          grep '^name = ' Cargo.lock | sort -u > /tmp/head.names
+          grep '^name = ' /tmp/base.lock | sort -u > /tmp/base.names || : > /tmp/base.names
+          added="$(comm -13 /tmp/base.names /tmp/head.names || true)"
+          if [ -n "$added" ]; then
+            n="$(printf '%s\n' "$added" | grep -c '^name' || true)"
+            echo "::warning title=Nouvelles dépendances::$n dépendance(s) ajoutée(s) — revue chaîne d'appro requise"
+            printf '%s\n' "$added" | sed 's/^name = /  - /'
+          else
+            echo "Aucune nouvelle dépendance vs ${{ github.base_ref }}."
+          fi
 
   couverture:
     name: Couverture (plan-engine ≥ 80%)
