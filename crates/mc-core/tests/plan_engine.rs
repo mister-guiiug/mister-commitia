@@ -1211,6 +1211,158 @@ fn c1_interactive_conflict_resolution_pauses_then_resumes() {
     assert_eq!(content, last_resolution);
 }
 
+/// Un commit qui ajoute DEUX fichiers, suivi d'un commit indépendant : permet de
+/// tester la découpe (C3) + le rejeu propre de la queue. Retourne (c1, c2).
+fn split_fixture() -> (Fixture, git2::Oid, git2::Oid) {
+    let f = init_repo();
+    commit(
+        &f.repo,
+        &[("README.md", "# app\n")],
+        "chore: init",
+        1_700_000_000,
+    );
+    checkout_new_branch(&f.repo, "feature/split");
+    let c1 = commit(
+        &f.repo,
+        &[("src/a.rs", "// a\n"), ("src/b.rs", "// b\n")],
+        "feat: add a and b together",
+        1_700_000_100,
+    );
+    let c2 = commit(
+        &f.repo,
+        &[("src/c.rs", "// c\n")],
+        "feat: add c on top",
+        1_700_000_200,
+    );
+    (f, c1, c2)
+}
+
+/// C3 — découpe PAR FICHIER : un commit à deux fichiers devient deux commits ;
+/// l'arbre final est préservé et la queue est rejouée sans conflit.
+#[test]
+fn c3_split_commit_by_file_preserves_tree_and_replays_tail() {
+    let (f, c1, c2) = split_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/split").unwrap();
+    let parts = vec![
+        SplitPart {
+            files: vec!["src/a.rs".into()],
+            message: "feat: add a".into(),
+        },
+        SplitPart {
+            files: vec!["src/b.rs".into()],
+            message: "feat: add b".into(),
+        },
+    ];
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Split {
+                    target: c1.to_string(),
+                    parts,
+                },
+            )],
+        )
+        .unwrap();
+    let plan = core.plan_dry_run(&plan.id).unwrap();
+    assert_eq!(plan.status, PlanStatus::DryRunOk);
+
+    let tip = f.repo.refname_to_id("refs/heads/feature/split").unwrap();
+    let preview = f
+        .repo
+        .refname_to_id(plan.preview_ref.as_ref().unwrap())
+        .unwrap();
+    // Aucune perte : arbre final identique au sommet d'origine.
+    assert_eq!(
+        f.repo.find_commit(preview).unwrap().tree_id(),
+        f.repo.find_commit(tip).unwrap().tree_id()
+    );
+
+    // Segment reconstruit oldest->newest : [part a, part b, c2'].
+    let seg_base = f.repo.find_commit(c1).unwrap().parent(0).unwrap().id();
+    let mut walk = f.repo.revwalk().unwrap();
+    walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+        .unwrap();
+    walk.push(preview).unwrap();
+    walk.hide(seg_base).unwrap();
+    let commits: Vec<git2::Oid> = walk.map(|o| o.unwrap()).collect();
+    assert_eq!(commits.len(), 3, "2 parts + 1 commit de queue rejoué");
+
+    let has = |oid: git2::Oid, p: &str| {
+        f.repo
+            .find_commit(oid)
+            .unwrap()
+            .tree()
+            .unwrap()
+            .get_path(std::path::Path::new(p))
+            .is_ok()
+    };
+    let msg = |oid: git2::Oid| {
+        f.repo
+            .find_commit(oid)
+            .unwrap()
+            .message()
+            .unwrap()
+            .to_string()
+    };
+    // Part 1 : a seul.
+    assert!(msg(commits[0]).starts_with("feat: add a"));
+    assert!(has(commits[0], "src/a.rs") && !has(commits[0], "src/b.rs"));
+    // Part 2 : a + b (adoption cumulative).
+    assert!(msg(commits[1]).starts_with("feat: add b"));
+    assert!(has(commits[1], "src/a.rs") && has(commits[1], "src/b.rs"));
+    // Queue rejouée : a + b + c.
+    assert_eq!(msg(commits[2]).trim(), "feat: add c on top");
+    assert!(has(commits[2], "src/c.rs") && has(commits[2], "src/a.rs"));
+
+    // Mapping : c1 -> 2 nouveaux commits, c2 -> 1.
+    let from_c1 = plan
+        .mapping
+        .iter()
+        .filter(|m| m.old == vec![c1.to_string()])
+        .count();
+    assert_eq!(from_c1, 2, "la cible se cartographie sur ses deux parts");
+    assert!(plan.mapping.iter().any(|m| m.old == vec![c2.to_string()]));
+}
+
+/// C3 — une partition INCOMPLÈTE (un fichier modifié non affecté) est refusée.
+#[test]
+fn c3_split_incomplete_partition_is_rejected() {
+    let (f, c1, _c2) = split_fixture();
+    let (core, repo_id) = core_with(&f);
+    let plan = core.plan_new(&repo_id, "feature/split").unwrap();
+    // b.rs manquant.
+    let parts = vec![
+        SplitPart {
+            files: vec!["src/a.rs".into()],
+            message: "feat: add a".into(),
+        },
+        SplitPart {
+            files: vec!["README.md".into()],
+            message: "oops not part of target".into(),
+        },
+    ];
+    let plan = core
+        .plan_set_ops(
+            &plan.id,
+            vec![op(
+                1,
+                Operation::Split {
+                    target: c1.to_string(),
+                    parts,
+                },
+            )],
+        )
+        .unwrap();
+    let err = core.plan_dry_run(&plan.id).unwrap_err().to_string();
+    assert!(
+        err.contains("README.md") || err.contains("pas modifié"),
+        "un fichier hors cible doit etre refuse : {err}"
+    );
+}
+
 /// C1 — l'abandon d'une session de conflit remet le plan en Draft et nettoie la
 /// session (une reprise ultérieure échoue proprement).
 #[test]
