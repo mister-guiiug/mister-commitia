@@ -117,6 +117,32 @@ const STRINGS: Record<string, Entry> = {
   },
   "set.gov.save": { fr: "Enregistrer la gouvernance", en: "Save governance" },
 
+  // -- Mises à jour (updater signé) ------------------------------------------
+  "set.upd.title": { fr: "Mises à jour", en: "Updates" },
+  "set.upd.note": {
+    fr: "Vérifie la présence d'une nouvelle version SIGNÉE. La signature est contrôlée contre la clé publique embarquée ; une mise à jour non signée ou mal signée est refusée. (Inactif tant qu'aucune release signée n'est publiée.)",
+    en: "Checks for a new SIGNED version. The signature is verified against the embedded public key; an unsigned or mis-signed update is rejected. (Inactive until a signed release is published.)",
+  },
+  "set.upd.check": { fr: "Vérifier les mises à jour", en: "Check for updates" },
+  "set.upd.desktopOnly": {
+    fr: "Disponible uniquement dans l'application desktop.",
+    en: "Available only in the desktop app.",
+  },
+  "set.upd.upToDate": { fr: "À jour — aucune mise à jour disponible.", en: "Up to date — no update available." },
+  "set.upd.available": {
+    fr: "Mise à jour disponible : version {v}",
+    en: "Update available: version {v}",
+  },
+  "set.upd.install": { fr: "Télécharger et installer", en: "Download and install" },
+  "set.upd.restart": {
+    fr: "Redémarrer l'application pour appliquer la mise à jour.",
+    en: "Restart the application to apply the update.",
+  },
+  "set.upd.installed": {
+    fr: "Mise à jour installée — redémarrer pour appliquer",
+    en: "Update installed — restart to apply",
+  },
+
   // -- Dépôts (Repos) --------------------------------------------------------
   "repo.declared.title": { fr: "Dépôts déclarés", en: "Declared repositories" },
   "repo.add": { fr: "Déclarer un dépôt local", en: "Declare a local repository" },

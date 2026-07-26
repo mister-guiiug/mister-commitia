@@ -25,10 +25,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": "all",
+    "createUpdaterArtifacts": false,
     "icon": ["icons/icon.ico", "icons/32x32.png", "icons/128x128.png", "icons/icon.png"],
     "resources": {
       "../../../skills/": "skills/"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/mister-guiiug/mister-commitia/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IFBMQUNFSE9MREVSIG1pc3Rlci1jb21taXRpYSAtIHJlbXBsYWNlciB2aWEgbnB4IHRhdXJpIHNpZ25lciBnZW5lcmF0ZQpSV1FBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQo="
     }
   }
 }

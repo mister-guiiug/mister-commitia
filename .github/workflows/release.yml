@@ -48,6 +48,10 @@ jobs:
     env:
       WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
       WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      # Updater signé : clé privée minisign (générée par `npx tauri signer generate`).
+      # Sans ce secret, `createUpdaterArtifacts` reste OFF → build normal non signé.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -57,8 +61,16 @@ jobs:
           node-version: 22
       - run: npm ci
         working-directory: apps/desktop
-      - run: npx tauri build
+      - name: Build (+ artefacts updater signés si clé fournie)
         working-directory: apps/desktop
+        shell: pwsh
+        run: |
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          } else {
+            Write-Host "::warning::pas de TAURI_SIGNING_PRIVATE_KEY — updater NON signe (createUpdaterArtifacts off)"
+            npx tauri build
+          }
       - name: Signature Authenticode (si certificat fourni)
         if: env.WINDOWS_CERT_BASE64 != ''
         shell: pwsh
@@ -155,6 +167,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    env:
+      # Updater signé (idem Windows) : clé privée minisign gated sur secret.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - name: Dépendances système (Linux)
@@ -170,8 +186,15 @@ jobs:
           node-version: 22
       - run: npm ci
         working-directory: apps/desktop
-      - run: npx tauri build
+      - name: Build (+ artefacts updater signés si clé fournie)
         working-directory: apps/desktop
+        run: |
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          else
+            echo "::warning::pas de TAURI_SIGNING_PRIVATE_KEY — updater NON signé (createUpdaterArtifacts off)"
+            npx tauri build
+          fi
       - name: Collecte des bundles + sommes de contrôle
         run: |
           set -euo pipefail
