@@ -629,6 +629,12 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RedactingFile {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Mise à jour signée (updater). Le plugin est INERTE tant que
+        // `plugins.updater` (endpoints + pubkey) n'est pas renseigné dans
+        // tauri.conf.json et qu'aucune release signée n'existe : `check()` renvoie
+        // alors « pas de mise à jour ». La signature des artefacts se fait au
+        // `tauri build` de release, gated sur le secret TAURI_SIGNING_PRIVATE_KEY.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // MC_DATA_DIR permet un usage portable (données à côté de l'exe) ;
             // par défaut : répertoire de données utilisateur (%APPDATA%).

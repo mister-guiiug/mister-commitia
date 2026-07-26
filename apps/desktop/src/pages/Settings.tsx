@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { asIpcError, call } from "../ipc";
+import { asIpcError, call, isMock } from "../ipc";
+import { checkForUpdate, installUpdate, type UpdateStatus } from "../updater";
 import { t, useLang } from "../i18n";
 import type { AiProviderConfig, AiProviderKind, RepoRef } from "../types";
 import { Badge, Button, Card, Empty, ErrorBox, Field, inputCls, useToast } from "../ui";
@@ -26,8 +27,32 @@ export default function SettingsPage({
   const [trailers, setTrailers] = useState("Signed-off-by");
   const [resign, setResign] = useState(false);
 
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  const [updBusy, setUpdBusy] = useState(false);
+
   const refresh = async () => setProviders(await call<AiProviderConfig[]>("ai_provider_list"));
   useEffect(() => { void refresh(); }, []);
+
+  const doCheckUpdate = async () => {
+    setUpdBusy(true);
+    try {
+      setUpdate(await checkForUpdate());
+    } finally {
+      setUpdBusy(false);
+    }
+  };
+
+  const doInstallUpdate = async () => {
+    setUpdBusy(true);
+    try {
+      await installUpdate();
+      toast("success", t("set.upd.installed"));
+    } catch (e) {
+      setError(asIpcError(e).message);
+    } finally {
+      setUpdBusy(false);
+    }
+  };
   useEffect(() => {
     const r = repos.find((x) => x.id === repoId) ?? repos[0];
     if (r) {
@@ -161,6 +186,40 @@ export default function SettingsPage({
             </label>
             <p className="text-xs text-slate-500">{t("set.gov.note")}</p>
             <Button kind="primary" onClick={saveGovernance}>{t("set.gov.save")}</Button>
+          </div>
+        )}
+      </Card>
+
+      <Card title={t("set.upd.title")}>
+        <p className="text-xs text-slate-500">{t("set.upd.note")}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <Button kind="primary" onClick={doCheckUpdate} loading={updBusy} disabled={isMock}>
+            {t("set.upd.check")}
+          </Button>
+          {(isMock || update?.kind === "unsupported") && (
+            <span className="text-xs text-slate-500">{t("set.upd.desktopOnly")}</span>
+          )}
+          {update?.kind === "up_to_date" && (
+            <span className="text-xs text-teal-300">{t("set.upd.upToDate")}</span>
+          )}
+          {update?.kind === "error" && (
+            <span className="text-xs text-rose-300">{update.message}</span>
+          )}
+        </div>
+        {update?.kind === "available" && (
+          <div className="mt-2 space-y-2 rounded border border-sky-800/60 bg-sky-950/20 p-2.5">
+            <div className="text-sm text-sky-200">
+              {t("set.upd.available", { v: update.version })}
+            </div>
+            {update.notes && (
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap text-xs text-slate-400">
+                {update.notes}
+              </pre>
+            )}
+            <Button kind="primary" onClick={doInstallUpdate} loading={updBusy}>
+              {t("set.upd.install")}
+            </Button>
+            <p className="text-[11px] text-amber-400/80">{t("set.upd.restart")}</p>
           </div>
         )}
       </Card>

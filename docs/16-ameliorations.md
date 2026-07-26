@@ -301,3 +301,26 @@ Le fil conducteur : d'abord fiabiliser le contrat UI↔cœur (T1) et unifier les
 > imbriqués, renommage), rejeu de queue (author/committer, fichier supprimé+retouché), gpgsign/hooks
 > de `sequencer_continue`. **3 tests de régression ajoutés** (traversée refusée, merge-segment
 > refusé, édition-ops efface le conflit) → plan_engine 31/31.
+
+> **Updater SIGNÉ scaffoldé le 2026-07-26 (dernier résidu V2).** Même approche gated que
+> l'Authenticode : tout est câblé, la SIGNATURE est gated sur un secret, INACTIF sans clé.
+> Livré : `tauri-plugin-updater` (Cargo + `main.rs` `.plugin(...)`) ; capability `updater:default` ;
+> `tauri.conf.json` → `plugins.updater` (endpoint GitHub `releases/latest/download/latest.json` +
+> **pubkey PLACEHOLDER de FORMAT minisign valide** — `createUpdaterArtifacts:false` par défaut donc
+> le build non signé reste vert, `bundle.targets` passé à `"all"` = **corrige aussi D1** : les jobs
+> Linux/macOS produisaient 0 bundle avec `["msi","nsis"]`) ; front `updater.ts` (`checkForUpdate`/
+> `installUpdate`, INERTES hors Tauri via `isMock`) + carte « Mises à jour » dans Réglages (i18n
+> FR/EN) ; `release.yml` : env `TAURI_SIGNING_PRIVATE_KEY`/`_PASSWORD` (secrets) + build conditionnel
+> `--config createUpdaterArtifacts:true` UNIQUEMENT si la clé est fournie (Windows pwsh + unix bash).
+> **Vérifié structurellement** : JSON/YAML valides, front `tsc` vert, 320 clés i18n résolues,
+> `cargo add` a mis à jour Cargo.lock (deps updater couvertes par la liste de licences deny.toml).
+> **Compilation Tauri validée par la CI** (`cargo check -p mc-desktop` — la clé de signature n'est
+> requise qu'au `tauri build` de bundle, pas au check, cf. doc Tauri). **ACTIVATION (sur une machine
+> capable, hors ce poste EDR)** : (1) `npx tauri signer generate -w ~/.tauri/mistercommitia.key` ;
+> (2) mettre la clé privée + son mot de passe dans les secrets `TAURI_SIGNING_PRIVATE_KEY` /
+> `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` ; (3) remplacer le `pubkey` placeholder de `tauri.conf.json`
+> par la clé publique générée ; (4) publier le `latest.json` (manifeste multi-OS) sur la Release —
+> **le plus simple : migrer les jobs de release vers `tauri-apps/tauri-action`** qui gère
+> bundling+signature+`latest.json`+release en un pas (le hand-roll multi-plateforme du manifeste est
+> le seul morceau NON fait ici, volontairement — fiable et testable seulement sur une vraie release
+> taggée). Le poste EDR ne peut ni générer le keypair ni builder Tauri → étapes 1/4 déléguées.
