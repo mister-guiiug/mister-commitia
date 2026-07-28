@@ -1,0 +1,9 @@
+{
+  // Extensions conseillées pour builder/déboguer localement.
+  "recommendations": [
+    "rust-lang.rust-analyzer",   // IntelliSense + build Rust (mc-core, mc-desktop)
+    "vadimcn.vscode-lldb",       // CodeLLDB : requis par les configs « Tauri desktop » et « mc-core tests »
+    "tauri-apps.tauri-vscode",   // commandes Tauri (dev/build) dans VS Code
+    "bradlc.vscode-tailwindcss"  // complétion Tailwind v4 (UI React)
+  ]
+}

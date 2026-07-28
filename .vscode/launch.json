@@ -1,0 +1,64 @@
+{
+  // Run & Debug — mister-commitia.
+  //
+  //  • « UI (mock) » : débogue l'interface React seule dans un navigateur (mode
+  //    démonstration, IPC simulé). Fonctionne SANS toolchain Rust. Aucune
+  //    extension requise (débogueur JS intégré à VS Code).
+  //  • « Tauri desktop » / « mc-core tests » : compilent et déboguent le Rust.
+  //    Requiert l'extension CodeLLDB (vadimcn.vscode-lldb) + la toolchain MSVC
+  //    (voir .vscode/extensions.json).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "UI (mock) — Edge",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/desktop",
+      "preLaunchTask": "ui:dev",
+      "presentation": { "group": "1-ui", "order": 1 }
+    },
+    {
+      "name": "UI (mock) — Chrome",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/desktop",
+      "preLaunchTask": "ui:dev",
+      "presentation": { "group": "1-ui", "order": 2 }
+    },
+    {
+      "name": "Tauri desktop — Debug (dev)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--manifest-path=apps/desktop/src-tauri/Cargo.toml"]
+      },
+      "preLaunchTask": "ui:dev",
+      "env": { "RUST_LOG": "mc_desktop=debug,mc_core=debug,info" },
+      "presentation": { "group": "2-desktop", "order": 1 }
+    },
+    {
+      "name": "Tauri desktop — Debug (release)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--release", "--manifest-path=apps/desktop/src-tauri/Cargo.toml"]
+      },
+      "preLaunchTask": "ui:build",
+      "presentation": { "group": "2-desktop", "order": 2 }
+    },
+    {
+      "name": "mc-core — Debug tests",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["test", "--no-run", "--manifest-path=crates/mc-core/Cargo.toml"],
+        "filter": { "kind": "test" }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "presentation": { "group": "3-core", "order": 1 }
+    }
+  ]
+}
