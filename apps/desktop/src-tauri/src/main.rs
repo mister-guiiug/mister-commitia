@@ -605,7 +605,6 @@ struct RedactingFile(PathBuf);
 
 impl std::io::Write for RedactingFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        use std::io::Write as _;
         let line = mc_core::secrets::redact(&String::from_utf8_lossy(buf));
         let mut f = std::fs::OpenOptions::new()
             .create(true)

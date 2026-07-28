@@ -1,0 +1,31 @@
+{
+  // Tâches de support pour Run & Debug. Le serveur Vite (mock IPC) démarre en
+  // arrière-plan ; le problemMatcher signale « prêt » sur la ligne de Vite pour
+  // que le débogueur enchaîne automatiquement.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ui:dev",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/apps/desktop" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "ready in|Local:\\s+http"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "ui:build",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/apps/desktop" },
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}

@@ -67,6 +67,8 @@ cd apps/desktop && npm install && npm run dev
 cd apps/desktop && npm run tauri dev
 ```
 
+**Débogage sous VS Code** : les configurations *Run & Debug* sont versionnées dans [`.vscode/`](.vscode) (`F5`). « UI (mock) — Edge/Chrome » débogue l'interface seule et ne demande **aucune toolchain Rust** ; « Tauri desktop » et « mc-core — Debug tests » exigent l'extension [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) et la toolchain MSVC. Les extensions utiles sont proposées à l'ouverture du dossier ([`extensions.json`](.vscode/extensions.json)).
+
 ### Publier une release
 
 ```bash

@@ -3,7 +3,12 @@ Thumbs.db
 .DS_Store
 
 # Éditeurs
-.vscode/
+# .vscode reste ignoré (réglages personnels), sauf les configs partagées
+# de build/débogage local (voir « Développer » dans le README).
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 .idea/
 
 # Sorties locales
