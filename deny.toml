@@ -10,16 +10,6 @@
 [advisories]
 ignore = [
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error non maintenu — dépendance transitive de la pile Tauri/GTK" },
-    { id = "RUSTSEC-2024-0411", reason = "bindings GTK3 non maintenus — pile Linux de Tauri, migration GTK4 suivie en amont" },
-    { id = "RUSTSEC-2024-0412", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0413", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0414", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0415", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0416", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0417", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0418", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0419", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
-    { id = "RUSTSEC-2024-0420", reason = "bindings GTK3 non maintenus — pile Linux de Tauri" },
     { id = "RUSTSEC-2025-0075", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
     { id = "RUSTSEC-2025-0080", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
     { id = "RUSTSEC-2025-0081", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
