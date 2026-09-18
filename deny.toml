@@ -8,8 +8,23 @@
 # À réévaluer à chaque montée de version de Tauri.
 
 [advisories]
+# PORTÉE « all », ET PAS LE DÉFAUT. cargo-deny évalue par défaut les advisories
+# `unsound` sur la seule portée `workspace` : une advisory qui ne frappe qu'une
+# crate TRANSITIVE n'est alors ni signalée ni ignorée — elle est invisible.
+#
+# Dans une application Tauri, cette portée revient à ne rien regarder : tout ce
+# qui compte est transitif. Le 18/09/2026, Dependabot signalait RUSTSEC-2024-0429
+# (glib) pendant que ce fichier restait muet, et l'écart ne venait pas d'un
+# désaccord de politique mais d'une politique JAMAIS ÉCRITE. Les deux valeurs
+# ci-dessous sont donc posées, même là où elles rejoignent le défaut du jour :
+# une politique de sécurité qui dépend du défaut d'un outil n'est pas une
+# politique. Mesuré : les ouvrir fait apparaître exactement une advisory, celle
+# que Dependabot signalait — ni plus, ni moins.
+unmaintained = "all"
+unsound = "all"
 ignore = [
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error non maintenu — dépendance transitive de la pile Tauri/GTK" },
+    { id = "RUSTSEC-2024-0429", reason = "glib < 0.20 : unsound dans VariantStrIter. Tiré par la pile GTK de Tauri (gtk, gdk, gio, pango, webkit2gtk…), qui n'est compilée QUE pour une cible Linux. Or `cargo check -p mc-desktop` ne tourne que sur Windows/MSVC et `release.yml` ne produit que du Windows : ce code n'entre dans aucun binaire livré. Le correctif exige glib 0.20, donc la génération gtk 0.20, donc une génération de Tauri plus récente — pas actionnable ici. À rouvrir le jour où une cible Linux entre dans release.yml." },
     { id = "RUSTSEC-2025-0075", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
     { id = "RUSTSEC-2025-0080", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
     { id = "RUSTSEC-2025-0081", reason = "dépendance transitive de la pile Tauri — non actionnable localement, réévaluer aux montées de version" },
