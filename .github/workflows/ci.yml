@@ -21,7 +21,7 @@ jobs:
       GIT_COMMITTER_NAME: ci
       GIT_COMMITTER_EMAIL: ci@example.org
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Dépendances système (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
@@ -37,7 +37,7 @@ jobs:
     name: Qualité (fmt, clippy, chaîne d'appro)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Dépendances système
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
@@ -81,7 +81,7 @@ jobs:
       GIT_COMMITTER_NAME: ci
       GIT_COMMITTER_EMAIL: ci@example.org
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Dépendances système
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
@@ -112,7 +112,7 @@ jobs:
     name: SBOM (CycloneDX)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Installer cargo-cyclonedx
@@ -137,8 +137,8 @@ jobs:
       run:
         working-directory: apps/desktop
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -153,8 +153,8 @@ jobs:
       run:
         working-directory: apps/desktop
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -174,10 +174,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Build de l'application desktop
@@ -200,10 +200,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm ci
