@@ -4,10 +4,15 @@ import { expect, test } from "@playwright/test";
 // i18n, analyse, vue graphe. Couvre les fonctionnalités des lots 2 à 5.
 
 test.beforeEach(async ({ page }) => {
+  // L'ONBOARDING EST ÉCARTÉ AVANT LE CHARGEMENT, pas fermé après. Il s'ouvre
+  // quand `repos_list` a répondu — une réponse asynchrone —, et l'ancien
+  // `isVisible()`, qui n'attend rien, faisait la course contre elle : selon le
+  // minutage, la fenêtre arrivait après la vérification et interceptait tous
+  // les clics suivants. Vite 8 a déplacé ce minutage le 25/09/2026, et la
+  // course s'est perdue à tous les coups. Un test qui voudrait l'éprouver le
+  // forcera par `?onboarding`, que l'app lit sans regarder ce drapeau.
+  await page.addInitScript(() => localStorage.setItem("mc:onboarded", "1"));
   await page.goto("/");
-  // Fermer l'onboarding premier lancement s'il apparaît.
-  const later = page.getByRole("button", { name: /Plus tard|Later/ });
-  if (await later.isVisible().catch(() => false)) await later.click();
 });
 
 test("shell : navigation FR présente", async ({ page }) => {
