@@ -32,3 +32,6 @@ apps/desktop/.playwright/
 # invisible à `git status` ici, absent partout ailleurs. Versionnée, la ligne
 # couvre aussi Prettier, qui honore `.gitignore` depuis la 3.x.
 .claude/worktrees/
+
+# Surcharge de config du build de test des E2E natifs (apps/desktop/e2e-native/README.md)
+apps/desktop/tauri.e2e.conf.json

@@ -165,12 +165,27 @@ jobs:
       - name: E2E (build web + mock IPC)
         run: npm run e2e
 
-  # E2E DESKTOP natifs (tauri-driver) — expérimental, à la demande uniquement :
+  # E2E DESKTOP natifs (WebView2) — expérimental, à la demande uniquement :
   # l'app native ne compile pas sur tout poste et la session WebDriver dépend de
   # l'environnement du runner (msedgedriver/WebView2). Les E2E Playwright ci-dessus
   # couvrent l'UI à chaque push.
+  #
+  # MODE « ATTACH » DEPUIS LE 25/09/2026. Vert le 24/07, rouge ensuite sur
+  # windows-latest : « session not created: DevToolsActivePort file doesn't
+  # exist ». L'app démarrait bien (sa base était créée) ; c'est la WebView2
+  # (152, puis 153) qui n'ouvrait plus le port de débogage que msedgedriver lui
+  # demande par WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS. wry pose toujours ses
+  # propres arguments par l'API, et les runtimes récents les font primer sur la
+  # variable. Sonde à l'appui : même `--remote-debugging-port` passé par la
+  # variable, le port reste fermé ; posé par la config de l'app, il s'ouvre.
+  # Même symptôme, sans cause, dans actions/runner-images#14738.
+  #
+  # D'où : un BUILD DE TEST dont la config ouvre le port (tauri-e2e-config.cjs),
+  # l'app lancée par le test, et msedgedriver qui s'y attache. Le pilote suit la
+  # version de la WEBVIEW2, pas celle d'Edge : sur windows-2022 les deux
+  # divergent (131 contre 152).
   e2e-desktop:
-    name: E2E desktop (tauri-driver, expérimental)
+    name: E2E desktop (WebView2, expérimental)
     if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
@@ -180,18 +195,43 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Build de l'application desktop
+      - name: Build de test (port de débogage ouvert par la config)
         working-directory: apps/desktop
+        shell: pwsh
         run: |
           npm ci
-          npx tauri build --no-bundle
-      - name: Installer tauri-driver
-        run: cargo install tauri-driver --locked
+          $surcharge = "$env:RUNNER_TEMP\tauri.e2e.conf.json"
+          node e2e-native/tauri-e2e-config.cjs $surcharge
+          npx tauri build --no-bundle --config $surcharge
+      - name: msedgedriver à la version exacte de la WebView2
+        shell: pwsh
+        run: |
+          $cle = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients'
+          $webview2 = (Get-ItemProperty "$cle\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}").pv
+          $edge = (Get-ItemProperty "$cle\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}" -ErrorAction SilentlyContinue).pv
+          "Image : $env:ImageOS $env:ImageVersion · WebView2 $webview2 · Edge $edge"
+          $dossier = "$env:RUNNER_TEMP\msedgedriver-$webview2"
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$webview2/edgedriver_win64.zip" -OutFile "$dossier.zip"
+          Expand-Archive "$dossier.zip" -DestinationPath $dossier -Force
+          & "$dossier\msedgedriver.exe" --version
+          "MSEDGEDRIVER=$dossier\msedgedriver.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: E2E natifs
         working-directory: apps/desktop/e2e-native
         run: |
           npm install
           npm test
+      - name: Diagnostic après échec
+        if: failure()
+        shell: pwsh
+        run: |
+          "== Port de débogage de l'app"
+          try { Invoke-RestMethod http://127.0.0.1:9222/json/version -TimeoutSec 3 } catch { "fermé : $($_.Exception.Message)" }
+          "== Dossier de données de l'app (a-t-elle démarré ?)"
+          $donnees = "$env:APPDATA\com.guiiug.mistercommitia"
+          if (Test-Path $donnees) { Get-ChildItem $donnees | ForEach-Object { $_.Name } } else { "absent" }
+          "== Processus restants"
+          Get-Process mister-commitia, mc-desktop, msedgewebview2, msedgedriver -ErrorAction SilentlyContinue |
+            Select-Object Name, Id | Format-Table | Out-String
 
   # Les tags v* passent par release.yml (bundles + GitHub Release) ;
   # ce job ne sert qu'aux tests de packaging à la demande.
