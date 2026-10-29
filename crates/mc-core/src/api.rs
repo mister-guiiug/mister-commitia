@@ -1189,7 +1189,7 @@ impl Core {
     /// inchangé. Toute édition est journalisée.
     pub fn skill_write(&self, name: &str, content: &str) -> Result<()> {
         let skill = self.skill_by_name(name)?;
-        let def: crate::skills::SkillDef = serde_yaml::from_str(content)
+        let def: crate::skills::SkillDef = serde_saphyr::from_str(content)
             .map_err(|e| CoreError::Invalid(format!("YAML invalide : {e}")))?;
         if def.name != name {
             return Err(CoreError::Invalid(format!(
@@ -1833,7 +1833,7 @@ impl Core {
 
 /// Exécute un cas de test de skill en mode déterministe (assistant local).
 fn run_skill_case(skill: &Skill, case: &skills::SkillTestCase) -> SkillTestResult {
-    use serde_yaml::Value as Y;
+    use serde_json::Value as Y;
 
     let g = &case.given;
     let mut governance = Governance::default();
@@ -1848,7 +1848,7 @@ fn run_skill_case(skill: &Skill, case: &skills::SkillTestCase) -> SkillTestResul
     }
     let given_files: Vec<String> = g
         .get("files")
-        .and_then(Y::as_sequence)
+        .and_then(Y::as_array)
         .map(|s| {
             s.iter()
                 .filter_map(|v| v.as_str().map(String::from))
@@ -1873,12 +1873,12 @@ fn run_skill_case(skill: &Skill, case: &skills::SkillTestCase) -> SkillTestResul
         deletions: 2,
         files,
     };
-    let commits: Vec<CommitInfo> = if let Some(msgs) = g.get("messages").and_then(Y::as_sequence) {
+    let commits: Vec<CommitInfo> = if let Some(msgs) = g.get("messages").and_then(Y::as_array) {
         msgs.iter()
             .map(|m| {
                 let full = match m {
                     Y::String(s) => s.clone(),
-                    other => serde_yaml::to_string(other).unwrap_or_default(),
+                    other => serde_saphyr::to_string(other).unwrap_or_default(),
                 };
                 let (subject, body) = full.split_once('\n').unwrap_or((full.as_str(), ""));
                 mk_commit(

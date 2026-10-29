@@ -46,9 +46,9 @@ pub struct Guardrail {
 pub struct SkillTestCase {
     pub name: String,
     #[serde(default)]
-    pub given: serde_yaml::Value,
+    pub given: serde_json::Value,
     #[serde(default)]
-    pub expect: serde_yaml::Value,
+    pub expect: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ pub struct SkillDef {
     #[serde(default)]
     pub detection_patterns: Vec<String>,
     #[serde(default)]
-    pub examples: serde_yaml::Value,
+    pub examples: serde_json::Value,
     #[serde(default)]
     pub tests: Option<TestsField>,
 }
@@ -146,7 +146,7 @@ pub fn load_dir(dir: &Path) -> Result<SkillLoadResult> {
 
 fn load_one(dir: &Path, manifest: &Path) -> Result<Skill> {
     let raw = std::fs::read_to_string(manifest)?;
-    let def: SkillDef = serde_yaml::from_str(&raw)?;
+    let def: SkillDef = serde_saphyr::from_str(&raw)?;
     let prompt = match (&def.prompt, &def.prompt_file) {
         (Some(p), _) => p.clone(),
         (None, Some(f)) => std::fs::read_to_string(dir.join(f))?,
@@ -156,7 +156,7 @@ fn load_one(dir: &Path, manifest: &Path) -> Result<Skill> {
         Some(TestsField::Cases(cases)) => cases.clone(),
         Some(TestsField::Path(p)) => {
             let raw = std::fs::read_to_string(dir.join(p))?;
-            serde_yaml::from_str(&raw)?
+            serde_saphyr::from_str(&raw)?
         }
         None => Vec::new(),
     };

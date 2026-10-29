@@ -86,8 +86,8 @@ impl From<serde_json::Error> for CoreError {
         CoreError::Invalid(format!("json : {e}"))
     }
 }
-impl From<serde_yaml::Error> for CoreError {
-    fn from(e: serde_yaml::Error) -> Self {
+impl From<serde_saphyr::Error> for CoreError {
+    fn from(e: serde_saphyr::Error) -> Self {
         CoreError::Invalid(format!("yaml : {e}"))
     }
 }
