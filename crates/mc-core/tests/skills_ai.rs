@@ -54,7 +54,13 @@ async fn ca7_cleaner_refuses_under_keep_required() {
     let p = &proposals[0];
     assert_eq!(p.status, ProposalStatus::Refused);
     assert!(p.after.is_none());
-    assert!(p.explanation.contains("keep-required"), "{}", p.explanation);
+    // Les messages d'échec ne recopient pas la proposition : les fixtures portent
+    // une clé d'API, et ce qui en dérive finirait dans les journaux de CI
+    // (CodeQL rust/cleartext-logging).
+    assert!(
+        p.explanation.contains("keep-required"),
+        "l'explication doit citer keep-required"
+    );
 
     // Aucune proposition n'a touché le dépôt.
     assert!(mc_core::gitx::GitEngine::workdir_clean(&f.repo).unwrap());
@@ -91,7 +97,11 @@ async fn ca7_cleaner_cleans_when_allowed_and_protects_trailers() {
         .await
         .unwrap();
     let p = &proposals[0];
-    assert_eq!(p.status, ProposalStatus::Proposed, "{}", p.explanation);
+    assert_eq!(
+        p.status,
+        ProposalStatus::Proposed,
+        "la proposition doit aboutir"
+    );
     let after = p.after.as_ref().unwrap();
     assert!(!after.contains("Generated with Claude Code"));
     assert!(!after.contains("Co-Authored-By: Claude"));
@@ -123,14 +133,17 @@ async fn ca7_edited_message_is_revalidated() {
         .await
         .unwrap();
     let p = &proposals[0];
-    assert_eq!(p.status, ProposalStatus::Proposed, "{}", p.explanation);
+    assert_eq!(
+        p.status,
+        ProposalStatus::Proposed,
+        "la proposition doit aboutir"
+    );
     assert!(
         p.after
             .as_ref()
             .unwrap()
             .contains("Signed-off-by: Jane Doe"),
-        "l'assistant conserve le trailer : {:?}",
-        p.after
+        "l'assistant conserve le trailer"
     );
     assert!(p.after.as_ref().unwrap().contains("JIRA-123"));
 
@@ -224,7 +237,11 @@ async fn synthesis_preserves_refs_and_breaking() {
         .await
         .unwrap();
     let p = &proposals[0];
-    assert_eq!(p.status, ProposalStatus::Proposed, "{}", p.explanation);
+    assert_eq!(
+        p.status,
+        ProposalStatus::Proposed,
+        "la proposition doit aboutir"
+    );
     let after = p.after.as_ref().unwrap();
     assert!(after.contains("BREAKING CHANGE: v1 tokens rejected"));
     assert!(after.contains("JIRA-77"));

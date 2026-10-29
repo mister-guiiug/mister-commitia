@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Lecture seule pour les huit jobs : aucun n'écrit sur GitHub (cache et
+# artefacts passent par le jeton d'exécution d'Actions).
+permissions:
+  contents: read
+
 jobs:
   core:
     name: Tests mc-core (${{ matrix.os }})
