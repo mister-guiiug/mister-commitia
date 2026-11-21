@@ -13,7 +13,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serde-saphyr = "2.2.0"
 thiserror = "2.0.21"
-chrono = { version = "0.4.45", features = ["serde"] }
+# Dates (module `date`) : time, que Tauri compile déjà avec ces trois fonctionnalités.
+# Remplace chrono, abandonnée par son mainteneur (RUSTSEC-2026-0543).
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
 uuid = { version = "1.29.3", features = ["v4"] }
 sha2 = "0.11.1"
 regex = "1.13.2"
@@ -34,5 +36,4 @@ proptest = "1.12.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
 git2 = { version = "0.21", default-features = false }
 serde_json = "1.0.154"
-chrono = { version = "0.4.45", features = ["serde"] }
 keyring = "4.2.0"

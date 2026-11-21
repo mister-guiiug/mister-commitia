@@ -1,9 +1,18 @@
 mod common;
 
-use chrono::{Duration, Utc};
 use common::mockhttp::MockServer;
 use mc_core::model::*;
 use mc_core::task::{CancelToken, TaskCtx, TaskEvent};
+use time::format_description::well_known::Rfc3339;
+use time::macros::utc_datetime;
+use time::{Duration, UtcDateTime};
+
+/// Date RFC 3339 d'il y a `days` jours, comme la renvoie une plateforme CI.
+fn days_ago_rfc3339(days: i64) -> String {
+    (UtcDateTime::now() - Duration::days(days))
+        .format(&Rfc3339)
+        .unwrap()
+}
 
 fn run(id: &str, pipeline: &str, days_ago: i64, leased: bool, running: bool) -> CiRun {
     CiRun {
@@ -18,7 +27,7 @@ fn run(id: &str, pipeline: &str, days_ago: i64, leased: bool, running: bool) -> 
             Some("success".into())
         },
         branch: Some("develop".into()),
-        created_at: (Utc::now() - Duration::days(days_ago)).to_rfc3339(),
+        created_at: days_ago_rfc3339(days_ago),
         url: None,
         leased,
         running,
@@ -66,7 +75,7 @@ fn simulate_classifies_protected_and_candidates() {
         run("r7", "p1", 40, false, false), // rang 1 → conservé (keep_last 2)
     ];
     let acct = account("http://localhost", CiKind::Github);
-    let report = mc_core::ci::simulate(&policy, &acct, &runs, Utc::now());
+    let report = mc_core::ci::simulate(&policy, &acct, &runs, UtcDateTime::now());
 
     let candidate_ids: Vec<&str> = report
         .candidates
@@ -92,9 +101,52 @@ fn simulate_classifies_protected_and_candidates() {
     assert_eq!(report.total, 7);
 }
 
+/// La règle d'âge lit les dates telles que les plateformes les écrivent :
+/// fraction à sept chiffres d'Azure DevOps, décalage horaire. Une date
+/// illisible compte pour un âge nul : le run est conservé, jamais proposé.
+#[test]
+fn simulate_reads_platform_dates_and_keeps_unreadable_ones() {
+    let policy = RetentionPolicy {
+        id: "pol-age".into(),
+        name: "90j".into(),
+        rules: RetentionRules {
+            max_age_days: Some(90),
+            keep_last_per_pipeline: 0,
+            protect_branches: vec![],
+            protect_failed: false,
+        },
+        enabled: true,
+    };
+    let dated = |id: &str, created_at: &str| CiRun {
+        created_at: created_at.into(),
+        ..run(id, "p1", 0, false, false)
+    };
+    let runs = vec![
+        dated("azdo-ancien", "2026-01-01T00:00:00.1234567Z"), // 323 j → CANDIDAT
+        dated("decale-90j", "2026-08-23T02:00:00+02:00"),     // 90 j pile → conservé
+        dated("decale-91j", "2026-08-22T01:00:00+01:00"),     // 91 j → CANDIDAT
+        dated("illisible", "pas une date"),                   // âge nul → conservé
+    ];
+    let now = utc_datetime!(2026-11-21 00:00);
+    let acct = account("http://localhost", CiKind::AzureDevops);
+    let report = mc_core::ci::simulate(&policy, &acct, &runs, now);
+
+    let candidate_ids: Vec<&str> = report
+        .candidates
+        .iter()
+        .map(|r| r.run_id.as_str())
+        .collect();
+    assert_eq!(
+        candidate_ids,
+        vec!["azdo-ancien", "decale-91j"],
+        "{report:?}"
+    );
+    assert_eq!(report.kept_recent, 2);
+}
+
 fn github_runs_json() -> String {
-    let old_date = (Utc::now() - Duration::days(200)).to_rfc3339();
-    let recent_date = (Utc::now() - Duration::days(3)).to_rfc3339();
+    let old_date = days_ago_rfc3339(200);
+    let recent_date = days_ago_rfc3339(3);
     serde_json::json!({
         "total_count": 2,
         "workflow_runs": [

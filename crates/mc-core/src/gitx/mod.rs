@@ -192,9 +192,7 @@ impl GitEngine {
             .collect();
 
         let author = c.author();
-        let date = chrono::DateTime::from_timestamp(c.time().seconds(), 0)
-            .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-            .unwrap_or_default();
+        let date = crate::date::iso_from_unix(c.time().seconds());
 
         Ok(CommitInfo {
             sha: oid.to_string(),

@@ -1,8 +1,9 @@
 pub mod azdo;
 pub mod github;
 
-use chrono::{DateTime, Utc};
+use time::UtcDateTime;
 
+use crate::date;
 use crate::error::{CoreError, Result};
 use crate::model::*;
 use crate::task::TaskCtx;
@@ -125,7 +126,7 @@ pub(crate) fn platform_error(
                 .get("x-ratelimit-reset")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<i64>().ok())
-                .map(|reset| (reset - Utc::now().timestamp()).max(1) as u64)
+                .map(|reset| (reset - UtcDateTime::now().unix_timestamp()).max(1) as u64)
         });
         return CoreError::RateLimited {
             retry_after_secs: secs.unwrap_or(60),
@@ -150,11 +151,15 @@ pub fn scope_hash(account: &CiAccount, policy: &RetentionPolicy) -> String {
 
 /// Moteur de politiques : PURE FONCTION → simulation testable sans réseau.
 /// Aucune suppression n'est jamais décidée ici, seulement classée.
+///
+/// `now` est l'instant de référence de l'âge des runs. Un run dont la date
+/// (`created_at`, RFC 3339) ne se lit pas compte pour un âge nul : la règle
+/// d'âge le conserve plutôt que de le proposer à la suppression.
 pub fn simulate(
     policy: &RetentionPolicy,
     account: &CiAccount,
     runs: &[CiRun],
-    now: DateTime<Utc>,
+    now: UtcDateTime,
 ) -> SimulationReport {
     let mut protected: Vec<ProtectedRun> = Vec::new();
     let mut candidates: Vec<CiRun> = Vec::new();
@@ -214,10 +219,8 @@ pub fn simulate(
             continue;
         }
         if let Some(max_age) = policy.rules.max_age_days {
-            let created = DateTime::parse_from_rfc3339(&r.created_at)
-                .map(|d| d.with_timezone(&Utc))
-                .unwrap_or(now);
-            let age_days = (now - created).num_days();
+            let created = date::parse_rfc3339(&r.created_at).unwrap_or(now);
+            let age_days = date::whole_days_between(created, now);
             if age_days <= max_age as i64 {
                 kept_recent += 1;
                 continue;
