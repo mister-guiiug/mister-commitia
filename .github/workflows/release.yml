@@ -131,7 +131,7 @@ jobs:
           $lines | Set-Content SHA256SUMS.txt -Encoding ascii
           Get-Content SHA256SUMS.txt
       - name: Attestation de provenance (SLSA, D2)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             target/release/bundle/msi/*.msi
@@ -216,7 +216,7 @@ jobs:
           fi
           cat "SHA256SUMS-${RUNNER_OS}.txt"
       - name: Attestation de provenance (SLSA, D2)
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
       - name: Publication sur la Release

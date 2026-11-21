@@ -127,7 +127,7 @@ jobs:
         # Cargo.toml de membre (mc-core, mc-desktop). Nom de fichier selon la
         # version : bom.json (recent) ou <crate>.cdx.json (ancien).
         run: cargo cyclonedx --format json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom-cyclonedx
           path: |
@@ -283,7 +283,7 @@ jobs:
           jamais dans les fichiers de l'application.
           "@ -replace "(?m)^          ", "" | Set-Content "$dir/LISEZMOI.txt" -Encoding utf8
           Compress-Archive -Path $dir -DestinationPath "portable/mister-commitia_${version}_x64_portable.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bundles-windows
           path: |
