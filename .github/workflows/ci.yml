@@ -145,7 +145,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 22.23.5
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm ci
@@ -161,7 +161,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 22.23.5
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm ci
@@ -199,7 +199,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 22.23.5
       - name: Build de test (port de débogage ouvert par la config)
         working-directory: apps/desktop
         shell: pwsh
@@ -250,7 +250,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 22.23.5
       - run: npm ci
         working-directory: apps/desktop
       - run: npx tauri build
