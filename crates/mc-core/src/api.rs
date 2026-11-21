@@ -1400,7 +1400,7 @@ impl Core {
         let policy = self.store.policy_get(policy_id)?;
         let runs = client.list_runs_with(max, ctx).await?;
         ctx.step("application de la politique de rétention", 0, None)?;
-        let report = ci::simulate(&policy, &account, &runs, chrono::Utc::now());
+        let report = ci::simulate(&policy, &account, &runs, time::UtcDateTime::now());
         let job = CleanupJob {
             id: new_id("job"),
             policy_id: policy.id.clone(),

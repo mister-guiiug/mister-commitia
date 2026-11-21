@@ -1,8 +1,9 @@
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+/// L'instant présent en RFC 3339 à la seconde, suffixe `Z` : la forme sous
+/// laquelle toutes les dates sont stockées (voir le module `date`).
 pub fn now_iso() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    crate::date::now_iso()
 }
 
 pub fn new_id(prefix: &str) -> String {

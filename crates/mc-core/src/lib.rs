@@ -9,6 +9,7 @@ pub mod ai;
 pub mod analyzer;
 pub mod api;
 pub mod ci;
+mod date;
 pub mod error;
 pub mod gitx;
 pub mod graph;

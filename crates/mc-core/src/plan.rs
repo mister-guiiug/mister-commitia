@@ -886,7 +886,7 @@ impl PlanEngine {
         ctx.step("création du backup", 0, None)?;
 
         // Backup obligatoire (CA-1) — son échec annule tout.
-        let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+        let ts = crate::date::backup_stamp(time::UtcDateTime::now());
         let short = plan.id.chars().rev().take(6).collect::<String>();
         let backup_ref = format!("refs/mc/backup/{branch}/{ts}-{short}");
         let backup_tag = format!("refs/tags/mc-backup-{}", plan.id);
