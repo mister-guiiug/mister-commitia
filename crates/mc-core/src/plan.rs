@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use git2::{Oid, Repository};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
 use crate::gitx::rewrite::{self, TodoGroup};
@@ -12,9 +11,7 @@ use crate::task::TaskCtx;
 
 pub fn plan_hash(fingerprint: &Fingerprint, ops: &[PlanOp]) -> String {
     let payload = serde_json::json!({ "fingerprint": fingerprint, "ops": ops });
-    let mut h = Sha256::new();
-    h.update(payload.to_string().as_bytes());
-    format!("{:x}", h.finalize())
+    crate::hash::sha256_hex(&[payload.to_string().as_bytes()])
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

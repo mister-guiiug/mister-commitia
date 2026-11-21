@@ -2,7 +2,6 @@ pub mod azdo;
 pub mod github;
 
 use chrono::{DateTime, Utc};
-use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
 use crate::model::*;
@@ -145,14 +144,8 @@ pub(crate) fn platform_error(
 }
 
 pub fn scope_hash(account: &CiAccount, policy: &RetentionPolicy) -> String {
-    let mut h = Sha256::new();
-    h.update(account.id.as_bytes());
-    h.update(
-        serde_json::to_string(&policy.rules)
-            .unwrap_or_default()
-            .as_bytes(),
-    );
-    format!("{:x}", h.finalize())
+    let rules = serde_json::to_string(&policy.rules).unwrap_or_default();
+    crate::hash::sha256_hex(&[account.id.as_bytes(), rules.as_bytes()])
 }
 
 /// Moteur de politiques : PURE FONCTION → simulation testable sans réseau.
